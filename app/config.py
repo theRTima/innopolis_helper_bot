@@ -43,7 +43,7 @@ class Settings:
                 "LLM_BASE_URL", "http://127.0.0.1:8080/v1"
             ),
             llm_model=os.getenv(
-                "LLM_MODEL", "mlx-community/gemma-4-e2b-it-4bit"
+                "LLM_MODEL", "qwen3.8-flash"
             ),
             llm_api_key=os.getenv("LLM_API_KEY", "local"),
             llm_session_id=os.getenv(

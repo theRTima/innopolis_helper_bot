@@ -14,16 +14,14 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
-Set `TELEGRAM_BOT_TOKEN` in `.env`. The bot connects to an OpenAI-compatible
-LLM endpoint at `http://127.0.0.1:8080/v1`; set `LLM_MODEL` to the model ID
-served by MLX-LM.
+Set `TELEGRAM_BOT_TOKEN` in `.env`. The bot uses an OpenAI-compatible
+provider for both answers and ingestion. Set `LLM_BASE_URL`, `LLM_MODEL` and
+`LLM_API_KEY` in `.env`; the model must support image input for PDF extraction.
+Some providers also require a stable routing header, configured with
+`LLM_SESSION_ID` and `LLM_USER_AGENT`.
 
-Start the MLX-LM server in a separate terminal on Apple Silicon macOS:
-
-```bash
-.venv/bin/python -m pip install mlx-lm
-.venv/bin/mlx_lm.server --model /path/to/model --host 127.0.0.1 --port 8080
-```
+The ingestion command uses the same provider settings. No local MLX server is
+required.
 
 Install the PDF-ingestion dependencies and prepare chunks:
 
