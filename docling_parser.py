@@ -28,7 +28,6 @@ from docling.document_converter import DocumentConverter
 import vision_parser as vp
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_PDF = vp.DEFAULT_PDF
 
 # A page with less readable text than this is treated as image-only and sent to
 # the vision model as a whole page.
@@ -407,16 +406,20 @@ def picture_chunks(
             continue
 
         # One embedded image can produce several Docling picture items.
-        previous = seen_rects.get(page_no)
-        if previous is not None:
+        previous_rects = seen_rects.setdefault(page_no, [])
+        duplicate = False
+        for previous in previous_rects:
             intersection = previous & target
             union = previous | target
             if not intersection.is_empty and (
                 intersection.get_area() / max(union.get_area(), 1.0)
                 > PICTURE_IOU_DEDUP
             ):
-                continue
-        seen_rects[page_no] = target
+                duplicate = True
+                break
+        if duplicate:
+            continue
+        previous_rects.append(target)
 
         match = matching_embedded_image(pdf_page, target)
         image_path = None
@@ -425,7 +428,11 @@ def picture_chunks(
                 image_path = vp.render_embedded_image(
                     pdf_doc, match[1], page_no - 1, picture_index, out_dir
                 )
-            except Exception:
+            except Exception as exc:
+                print(
+                    f"page {page_no}: native image extraction failed "
+                    f"({exc}); rendering picture region instead"
+                )
                 image_path = None
         if image_path is None:
             image_path = render_region(pdf_page, target, out_dir, picture_index)
@@ -527,15 +534,19 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pdf_doc = pymupdf.open(pdf_path)
-    page_count = pdf_doc.page_count
-    selected = set(page + 1 for page in vp.parse_pages(pages_spec, page_count))
-    if not selected:
-        raise SystemExit("No pages selected.")
+    try:
+        page_count = pdf_doc.page_count
+        selected = set(page + 1 for page in vp.parse_pages(pages_spec, page_count))
+        if not selected:
+            raise ValueError("No pages selected.")
 
-    first, last = min(selected), max(selected)
-    print(f"Docling: pages {first}-{last}")
-    converter = DocumentConverter()
-    result = converter.convert(pdf_path, page_range=(first, last))
+        first, last = min(selected), max(selected)
+        print(f"Docling: pages {first}-{last}")
+        converter = DocumentConverter()
+        result = converter.convert(pdf_path, page_range=(first, last))
+    except Exception:
+        pdf_doc.close()
+        raise
     doc = result.document
 
     orders = item_order_map(doc)
@@ -642,7 +653,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Parse a PDF with Docling, using vision for pictures and unreadable pages."
     )
-    parser.add_argument("pdf", nargs="?", default=str(DEFAULT_PDF), help="PDF path")
+    parser.add_argument("pdf", help="PDF path")
     parser.add_argument(
         "--out-dir", default=None, help="Output directory (default: repo root)"
     )

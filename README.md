@@ -129,7 +129,6 @@ python vision_parser.py "/path/to/document.pdf" --pages 4
 
 | Constant | File | Purpose |
 | --- | --- | --- |
-| `DEFAULT_PDF` | `docling_parser.py` | PDF used when no path is passed |
 | `MIN_PAGE_TEXT` | `docling_parser.py` | Below this many readable characters a page goes to vision fallback |
 | `PICTURE_IOU_DEDUP` | `docling_parser.py` | Overlap threshold for deduplicating picture items |
 | `MAX_TABLE_CELL_CHARS` | `docling_parser.py` | A longer cell means Docling likely mistook text for a table |

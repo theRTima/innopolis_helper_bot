@@ -22,7 +22,6 @@ from mlx_vlm.prompt_utils import apply_chat_template
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
 
-DEFAULT_PDF = Path("/Users/timur/Downloads/БП Командировка.pdf")
 MODEL_ID = "mlx-community/gemma-4-e4b-it-4bit"
 DPI = 200
 MAX_TOKENS = 4096
@@ -250,11 +249,9 @@ def postprocess_page_chunks(chunks, pdf_name, page_number):
             continue
 
         if pending_headings:
-            heading = pending_headings.pop(0)["content"].strip()
-            chunk["title"] = heading
-            chunk["content"] = f"{heading}\n\n{chunk['content']}".strip()
-            for extra in pending_headings:
-                chunk["content"] = f"{extra['content']}\n\n{chunk['content']}"
+            headings = [item["content"].strip() for item in pending_headings]
+            chunk["title"] = headings[0]
+            chunk["content"] = "\n\n".join([*headings, chunk["content"]]).strip()
             pending_headings = []
 
         merged.append(chunk)
@@ -324,21 +321,36 @@ def find_content_images(page):
 
 def parse_pages(spec, page_count):
     """Parse a 1-based page selection such as ``4`` or ``4,7-9``."""
-    if not spec:
+    if spec is None or not spec.strip():
         return list(range(page_count))
 
     selected = set()
     for part in spec.split(","):
         part = part.strip()
         if not part:
-            continue
+            raise ValueError(f"Invalid page selection: {spec!r}")
         if "-" in part:
-            start, end = part.split("-", 1)
-            selected.update(range(int(start) - 1, int(end)))
+            bounds = part.split("-")
+            if (
+                len(bounds) != 2
+                or not all(bound.isdecimal() for bound in bounds)
+            ):
+                raise ValueError(f"Invalid page range: {part!r}")
+            start, end = map(int, bounds)
+            if start < 1 or end < start or end > page_count:
+                raise ValueError(
+                    f"Page range {part!r} is outside 1-{page_count} or reversed"
+                )
+            selected.update(range(start - 1, end))
         else:
-            selected.add(int(part) - 1)
+            if not part.isdecimal():
+                raise ValueError(f"Invalid page number: {part!r}")
+            page = int(part)
+            if page < 1 or page > page_count:
+                raise ValueError(f"Page {page} is outside 1-{page_count}")
+            selected.add(page - 1)
 
-    return [page for page in sorted(selected) if 0 <= page < page_count]
+    return sorted(selected)
 
 
 def write_outputs(chunks, pdf_path, out_dir):
@@ -469,7 +481,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Parse a PDF into vision-generated RAG chunks."
     )
-    parser.add_argument("pdf", nargs="?", default=str(DEFAULT_PDF), help="PDF path")
+    parser.add_argument("pdf", help="PDF path")
     parser.add_argument(
         "--out-dir", default=None, help="Output directory (default: repo root)"
     )
