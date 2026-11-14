@@ -81,6 +81,7 @@ def item_order_map(doc):
 
 def heading_map(doc):
     """Nearest heading path for every item in the document."""
+
     result = {}
     stack = {}
     for item, _level in doc.iterate_items():
@@ -102,6 +103,7 @@ def page_heading_context(doc, skip_refs):
     first readable item of every page and keep the last section-like line as
     the context for the following pages.
     """
+    
     first_item = {}
     for item, _level in doc.iterate_items():
         page = iter_prov_page(item)
@@ -632,7 +634,7 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
         )
         final.extend(finalize_page(page_chunks, pdf_path.name, page))
 
-    jsonl_path, md_path = vp.write_outputs(final, pdf_path, out_dir)
+    jsonl_path, md_path = vp.write_outputs(final, pdf_path, out_dir, complete=pages_spec is None)
     print(f"Saved {len(final)} chunks to {jsonl_path}")
     print(f"Human-readable preview: {md_path}")
     return final

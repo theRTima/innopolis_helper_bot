@@ -37,7 +37,11 @@ data/cache/
 data/eval/generated/
 *.embedding.json
 *.chunks.jsonl
+*.chunks.jsonl.tmp
+*.chunks.meta.json
+*.chunks.meta.json.tmp
 *.chunks.md
+/data/knowledge/*.png
 /openparse_test/*.md
 /openparse_test/*.png
 /*.png

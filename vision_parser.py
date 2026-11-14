@@ -10,20 +10,33 @@ a Telegram assistant can retrieve and answer questions from.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
 import json
+import os
 import re
+import sys
 from pathlib import Path
 
 import pymupdf
+from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
+
+# engine for ai models
+from openai import OpenAI
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
+load_dotenv(BASE_DIR / ".env")
 
 DEFAULT_PDF = BASE_DIR / "data/knowledge/БП Командировка.pdf"
-MODEL_ID = "mlx-community/gemma-4-e4b-it-4bit"
+VISION_BACKEND = os.getenv("VISION_BACKEND", "mlx" if sys.platform == "darwin" else "llama_cpp")
+MODEL_ID = os.getenv(
+    "VISION_MODEL",
+    "mlx-community/gemma-4-e4b-it-4bit"
+)
 DPI = 200
-MAX_TOKENS = 4096
+MAX_TOKENS = int(os.getenv("VISION_MAX_TOKENS", "4096" if VISION_BACKEND == "mlx" else "1200"))
 
 # An embedded image is treated as document content if it covers this share of
 # the page. Small logos/icons are ignored.
@@ -56,6 +69,35 @@ def get_model():
 
 
 def run_vision(prompt, image_path):
+    if VISION_BACKEND == "llama_cpp":
+        
+
+        image = base64.b64encode(Path(image_path).read_bytes()).decode("ascii")
+        with OpenAI(
+            base_url=os.getenv("VISION_BASE_URL", os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1")),
+            api_key=os.getenv("LLM_API_KEY", "local"),
+            timeout=600,
+            max_retries=1,
+        ) as client:
+            response = client.chat.completions.create(
+                model=MODEL_ID,
+                messages=[
+                    {
+
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}},
+                        ],
+                    }
+                ],
+                max_tokens=MAX_TOKENS,
+                temperature=0,
+            )
+        message = response.choices[0].message
+        return (message.content or getattr(message, "reasoning_content", None) or "").strip()
+
+    if VISION_BACKEND != "mlx":
+        raise ValueError(f"Неизвестный VISION_BACKEND: {VISION_BACKEND}")
     from mlx_vlm import generate
     from mlx_vlm.prompt_utils import apply_chat_template
 
@@ -344,11 +386,13 @@ def parse_pages(spec, page_count):
     return [page for page in sorted(selected) if 0 <= page < page_count]
 
 
-def write_outputs(chunks, pdf_path, out_dir):
+def write_outputs(chunks, pdf_path, out_dir, *, complete=True):
     jsonl_path = out_dir / f"{pdf_path.stem}.chunks.jsonl"
-    with jsonl_path.open("w", encoding="utf-8") as handle:
+    temporary_jsonl = jsonl_path.with_suffix(jsonl_path.suffix + ".tmp")
+    with temporary_jsonl.open("w", encoding="utf-8") as handle:
         for chunk in chunks:
             handle.write(json.dumps(chunk, ensure_ascii=False) + "\n")
+    temporary_jsonl.replace(jsonl_path)
 
     md_path = out_dir / f"{pdf_path.stem}.chunks.md"
     sections = []
@@ -358,6 +402,21 @@ def write_outputs(chunks, pdf_path, out_dir):
             header += f" — {chunk['title']}"
         sections.append(f"{header}\n\n{chunk['content']}")
     md_path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+
+    meta_path = out_dir / f"{pdf_path.stem}.chunks.meta.json"
+    temporary_meta = meta_path.with_suffix(meta_path.suffix + ".tmp")
+    temporary_meta.write_text(
+        json.dumps(
+            {
+                "source_sha256": hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
+                "chunks_sha256": hashlib.sha256(jsonl_path.read_bytes()).hexdigest(),
+                "chunk_count": len(chunks),
+                "complete": complete,
+            }
+        ),
+        encoding="utf-8",
+    )
+    temporary_meta.replace(meta_path)
 
     return jsonl_path, md_path
 
@@ -462,7 +521,7 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
         for image_path in created_images:
             image_path.unlink(missing_ok=True)
 
-    jsonl_path, md_path = write_outputs(chunks, pdf_path, out_dir)
+    jsonl_path, md_path = write_outputs(chunks, pdf_path, out_dir, complete=pages_spec is None)
     print(f"Saved {len(chunks)} chunks to {jsonl_path}")
     print(f"Human-readable preview: {md_path}")
     return chunks

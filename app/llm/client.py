@@ -25,9 +25,9 @@ def _format_context(results: list[tuple[float, Chunk]]) -> str:
     for position in range(len(results) - 1, -1, -1):
         chunk = results[position][1]
         blocks.append(
-            f"[{position + 1}] {chunk.document}, стр. {chunk.page_label}\n{chunk.text}"
+            f"[{position + 1}] {chunk.document}, стр. {chunk.page_label}\n{chunk.context}"
         )
-    return "\n\n".join(blocks)
+    return "\n".join(blocks)
 
 
 class LLMClient:

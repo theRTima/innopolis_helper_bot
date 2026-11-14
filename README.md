@@ -1,13 +1,15 @@
 # innopolis_helper_bot
 
-Telegram assistant for the organisation. The bot currently searches PDF text
-with an in-memory BM25 index; `docling_parser.py` is a separate ingestion
-prototype that produces richer chunks for future indexing.
+Telegram assistant for the organisation. The bot searches PDF chunks with an
+in-memory BM25 index. Chunks are prepared offline by `scripts/ingest.py`, which
+uses `docling_parser.py` when Docling is installed and otherwise falls back to
+the lighter PyMuPDF pipeline in `app/ingest/light.py`. Both paths reuse
+`vision_parser.py` for pictures and image-only pages.
 
-The vision code uses `mlx_vlm` and an MLX model on Apple Silicon. On Linux,
-the bot can consume prepared `.chunks.jsonl` files; PDFs without one still use
-OpenParse and the local llama.cpp Gemma server. The Docling and vision
-dependencies are intentionally separate from `requirements.txt`.
+The vision code supports `mlx_vlm` on Apple Silicon and the local llama.cpp
+Gemma server on Linux. The bot consumes prepared `.chunks.jsonl` files; a PDF
+without one is parsed with OpenParse at startup as a legacy fallback. Docling
+and MLX dependencies are intentionally separate from `requirements.txt`.
 
 ## Docling first, vision only when needed
 
@@ -111,19 +113,38 @@ paragraphs and lists rather than a fixed character window. On top of that:
 ## Usage
 
 ```bash
-# Docling-first pipeline (recommended)
+# Prepare every PDF in data/knowledge for the bot.
+.venv/bin/python scripts/ingest.py
+
+# Prepare one file or force a rebuild after changing it.
+.venv/bin/python scripts/ingest.py "data/knowledge/БП Командировка.pdf" --force
+
+# Use a specific parser instead of auto-detecting Docling.
+.venv/bin/python scripts/ingest.py --parser light
+```
+
+`scripts/ingest.py` writes `<name>.chunks.jsonl` and
+`<name>.chunks.meta.json` next to each PDF. The metadata stores the source and
+chunk checksums, so the bot ignores stale or partial output and falls back to
+OpenParse instead. The heavy parsing runs offline, not on every user question.
+
+The vision step uses `VISION_BACKEND`:
+
+- `llama_cpp` (default on Linux) sends rendered images to the local
+  OpenAI-compatible llama.cpp server from `VISION_BASE_URL`.
+- `mlx` uses the MLX-VLM model on Apple Silicon.
+
+```bash
+# Docling-first pipeline directly (recommended when Docling is installed)
 python docling_parser.py "/path/to/document.pdf"
 
 # specific pages (1-based), useful while testing
 python docling_parser.py "/path/to/document.pdf" --pages 4,7-10
-
-# write next to the matching PDF so the bot uses the prepared chunks on restart
-python docling_parser.py "data/knowledge/БП Командировка.pdf" --out-dir data/knowledge
 ```
 
 `vision_parser.py` can still be run on its own as a vision-only parser, and its
 model loading, rendering, prompt handling and writers are reused by
-`docling_parser.py`.
+`docling_parser.py` and `app/ingest/light.py`.
 
 ```bash
 # vision-only mode, useful for comparing results
@@ -131,6 +152,13 @@ python vision_parser.py "/path/to/document.pdf" --pages 4
 ```
 
 ### Configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `VISION_BACKEND` | `llama_cpp` (default on Linux) or `mlx` |
+| `VISION_BASE_URL` | OpenAI-compatible endpoint for the vision model |
+| `VISION_MODEL` | Model name sent to that endpoint |
+| `VISION_MAX_TOKENS` | Max tokens per vision response |
 
 | Constant | File | Purpose |
 | --- | --- | --- |

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import logging
 import math
 import re
 from collections import Counter
@@ -12,6 +14,7 @@ from pathlib import Path
 import snowballstemmer
 
 TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -21,12 +24,27 @@ class Chunk:
     page_from: int
     page_to: int
     text: str
+    title: str = ""
+    content: str | None = None
+    data: object = None
+    origin: str = "openparse"
+    kind: str = "text"
 
     @property
     def page_label(self) -> str:
         if self.page_from == self.page_to:
             return str(self.page_from)
         return f"{self.page_from}-{self.page_to}"
+
+    @property
+    def context(self) -> str:
+        if self.content is None:
+            return self.text
+        parts = [self.title] if self.title and self.title not in self.content else []
+        parts.append(self.content)
+        if self.data is not None:
+            parts.append("Структурированные данные: " + json.dumps(self.data, ensure_ascii=False))
+        return "\n".join(parts)
 
 
 def tokenize(text: str) -> list[str]:
@@ -42,25 +60,46 @@ def load_chunks(knowledge_dir: Path) -> list[Chunk]:
     parser = openparse.DocumentParser()
     for pdf in sorted(knowledge_dir.glob("*.pdf")):
         prepared = knowledge_dir / f"{pdf.stem}.chunks.jsonl"
-        if prepared.is_file():
-            for line_number, line in enumerate(prepared.read_text(encoding="utf-8").splitlines(), 1):
-                if not line.strip():
-                    continue
-                try:
+        meta_path = knowledge_dir / f"{pdf.stem}.chunks.meta.json"
+        if prepared.is_file() and meta_path.is_file():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                checksum = hashlib.sha256(pdf.read_bytes()).hexdigest()
+                if meta["source_sha256"] != checksum:
+                    raise ValueError("PDF изменился после обработки")
+                if not meta["complete"] or meta["chunks_sha256"] != hashlib.sha256(prepared.read_bytes()).hexdigest():
+                    raise ValueError("Неполный или изменённый набор чанков")
+                prepared_chunks = []
+                for line_number, line in enumerate(prepared.read_text(encoding="utf-8").splitlines(), 1):
+                    if not line.strip():
+                        continue
                     item = json.loads(line)
                     page = int(item["page"])
-                    chunks.append(
+                    if page < 1 or not item["text"].strip():
+                        raise ValueError(f"Некорректный чанк в строке {line_number}")
+                    prepared_chunks.append(
                         Chunk(
                             chunk_id=str(item["id"]),
                             document=pdf.stem,
                             page_from=page,
                             page_to=page,
                             text=str(item["text"]),
+                            title=str(item.get("title") or ""),
+                            content=item.get("content"),
+                            data=item.get("data"),
+                            origin=str(item.get("origin") or "vision"),
+                            kind=str(item.get("type") or "text"),
                         )
                     )
-                except (KeyError, TypeError, ValueError) as error:
-                    raise ValueError(f"Некорректный чанк в {prepared}:{line_number}") from error
-            continue
+                if len(prepared_chunks) != meta["chunk_count"] or not prepared_chunks:
+                    raise ValueError("Не совпадает количество чанков")
+            except (AttributeError, KeyError, TypeError, ValueError) as error:
+                logger.warning("Игнорирую %s: %s", prepared, error)
+            else:
+                chunks.extend(prepared_chunks)
+                continue
+        elif prepared.is_file():
+            logger.warning("Игнорирую %s: нет метаданных о версии PDF", prepared)
         document = parser.parse(pdf)
         for index, node in enumerate(document.nodes):
             text = node.text.strip()

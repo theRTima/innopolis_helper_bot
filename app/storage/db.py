@@ -102,9 +102,13 @@ class Database:
                 await session.flush()
                 session.add(Message(conversation_id=conversation_id, role="user", body=question))
                 reply = Message(conversation_id=conversation_id, role="assistant", body=answer)
+
                 session.add(reply)
+                
                 await session.flush()
+                
                 session.add(Answer(message_id=reply.id, question_id=row.id, text=answer, status="generated"))
+            
             return row.id
 
     async def save_feedback(
