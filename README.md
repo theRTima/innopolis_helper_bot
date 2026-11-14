@@ -159,3 +159,5 @@ the recommended entry point.
   will stay on the Docling path.
 - Embeddings and the retrieval/answer loop are downstream of this repository's
   output; this layer only produces the chunks.
+
+:)
