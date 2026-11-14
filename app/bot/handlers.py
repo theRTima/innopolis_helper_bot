@@ -9,6 +9,7 @@ from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
+from app.anchors import Locator, LocatorKind, build_anchor_url
 from app.bot.keyboards import feedback_keyboard
 from app.config import Settings
 from app.llm.client import LLMClient
@@ -138,7 +139,30 @@ async def handle_question(
         logger.exception("Failed to save question")
 
     reply = _truncate(answer) + _format_sources(results)
-    markup = feedback_keyboard(question_id) if question_id is not None else None
+    source_links: list[tuple[str, str]] = []
+    if settings.documents_base_url and settings.document_link_secret:
+        seen: set[tuple[str, int]] = set()
+        for _, chunk in results:
+            key = (chunk.document, chunk.page_from)
+            if key in seen:
+                continue
+            seen.add(key)
+            source_links.append(
+                (
+                    f"Открыть источник [{len(source_links) + 1}] · стр. {chunk.page_label}",
+                    build_anchor_url(
+                        settings.documents_base_url,
+                        chunk.document,
+                        Locator(LocatorKind.PDF_PAGE, chunk.page_from),
+                        secret=settings.document_link_secret,
+                    ),
+                )
+            )
+    markup = (
+        feedback_keyboard(question_id, source_links)
+        if question_id is not None or source_links
+        else None
+    )
     await message.answer(reply, reply_markup=markup)
 
 

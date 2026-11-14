@@ -10,3 +10,13 @@ def test_feedback_keyboard_callbacks() -> None:
         "fb:helpful:42",
         "fb:not_helpful:42",
     ]
+
+
+def test_keyboard_includes_source_link_and_feedback() -> None:
+    markup = feedback_keyboard(
+        7,
+        [("Открыть источник [1] · стр. 2", "https://docs.example/documents/x")],
+    )
+
+    assert markup.inline_keyboard[0][0].url == "https://docs.example/documents/x"
+    assert markup.inline_keyboard[1][0].callback_data == "fb:helpful:7"

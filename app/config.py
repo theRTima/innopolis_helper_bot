@@ -27,6 +27,8 @@ class Settings:
     min_score: float
     knowledge_dir: Path
     database_path: Path
+    documents_base_url: str
+    document_link_secret: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -41,6 +43,8 @@ class Settings:
             min_score=float(os.getenv("MIN_SCORE", "0")),
             knowledge_dir=_path("KNOWLEDGE_DIR", "data/knowledge"),
             database_path=_path("DATABASE_PATH", "storage/bot.db"),
+            documents_base_url=os.getenv("DOCUMENTS_BASE_URL", "").rstrip("/"),
+            document_link_secret=os.getenv("DOCUMENT_LINK_SECRET", ""),
         )
 
     def validate(self) -> None:
@@ -48,4 +52,8 @@ class Settings:
             raise ValueError(
                 "TELEGRAM_BOT_TOKEN не задан. Скопируйте .env.example в .env "
                 "и укажите токен от @BotFather."
+            )
+        if bool(self.documents_base_url) != bool(self.document_link_secret):
+            raise ValueError(
+                "DOCUMENTS_BASE_URL и DOCUMENT_LINK_SECRET должны быть заданы вместе."
             )
