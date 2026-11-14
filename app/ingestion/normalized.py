@@ -323,6 +323,7 @@ class NormalizedDocument:
                 len(payload.text) <= 150 for payload in text_payloads
             ):
                 return only_structured
+            return "mixed"
         if isinstance(requested, str) and requested in ALLOWED_CHUNK_TYPES:
             if requested == "text" and structured:
                 return "mixed"
@@ -799,6 +800,33 @@ def _split_text_chunk(chunk: dict, max_chars: int = 1800) -> list[dict]:
     return result or [chunk]
 
 
+def _merge_sibling_text_chunks(
+    chunks: list[dict], max_chars: int = 2000
+) -> list[dict]:
+    merged: list[dict] = []
+    for chunk in chunks:
+        previous = merged[-1] if merged else None
+        if (
+            previous is not None
+            and chunk.get("type") == "text"
+            and previous.get("type") == "text"
+            and not chunk.get("data")
+            and not previous.get("data")
+            and chunk.get("page") == previous.get("page")
+            and chunk.get("title") == previous.get("title")
+            and len(previous.get("content") or "")
+            + len(chunk.get("content") or "")
+            + 2
+            <= max_chars
+        ):
+            previous["content"] = (
+                f"{previous['content'].rstrip()}\n\n{chunk['content'].lstrip()}"
+            )
+            continue
+        merged.append(chunk)
+    return merged
+
+
 def finalize_chunks(
     chunks: list[dict], *, document_id: str, version_id: str
 ) -> list[dict]:
@@ -829,6 +857,8 @@ def finalize_chunks(
             pending = []
         merged.append(chunk)
     merged.extend(pending)
+
+    merged = _merge_sibling_text_chunks(merged)
 
     split: list[dict] = []
     for chunk in merged:
