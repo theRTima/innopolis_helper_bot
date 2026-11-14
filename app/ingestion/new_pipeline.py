@@ -58,7 +58,24 @@ def analyze_image(
         retry_note=retry_note,
     )
     raw = vp.run_vision(prompt, image_path)
-    return vp.parse_json_object(raw), raw
+    analysis = vp.parse_json_object(raw)
+    if isinstance(analysis.get("items"), list) and analysis["items"]:
+        return analysis, raw
+    if analysis.get("status") == "empty":
+        return analysis, raw
+
+    # Dense pages occasionally produce truncated JSON. Retry once with a
+    # compact-output instruction before falling back to deterministic chunks.
+    retry_prompt = prompt + (
+        "\n\nIMPORTANT: Return one valid JSON object only. "
+        "Keep items concise, omit decorative details, and ensure the JSON "
+        "is complete and parseable."
+    )
+    retry_raw = vp.run_vision(retry_prompt, image_path)
+    retry_analysis = vp.parse_json_object(retry_raw)
+    if isinstance(retry_analysis.get("items"), list) and retry_analysis["items"]:
+        return retry_analysis, retry_raw
+    return retry_analysis or analysis, retry_raw or raw
 
 
 def _text_from_transcription(item: dict) -> str:
@@ -502,7 +519,8 @@ def build_from_pdf(
             )
             if not added:
                 warnings.append(
-                    f"page {page_no}: picture analysis produced no items"
+                    f"page {page_no}: picture analysis produced no items; "
+                    f"raw={raw[:200]!r}"
                 )
 
         for page in sorted(selected):

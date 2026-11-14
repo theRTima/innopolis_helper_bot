@@ -27,7 +27,7 @@ PROMPTS_DIR = BASE_DIR / "prompts"
 SETTINGS = Settings.from_env()
 MODEL_ID = SETTINGS.llm_model
 DPI = 200
-MAX_TOKENS = 4096
+MAX_TOKENS = 8192
 
 # An embedded image is treated as document content if it covers this share of
 # the page. Small logos/icons are ignored.

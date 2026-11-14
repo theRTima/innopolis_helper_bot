@@ -208,7 +208,7 @@ def extract_version(
                 )
             )
             if (
-                cached.get("status") != "ready"
+                cached.get("status") not in {"ready", "partial"}
                 or cached.get("source_sha256") != source_sha256
                 or cached.get("configuration") != config
             ):
