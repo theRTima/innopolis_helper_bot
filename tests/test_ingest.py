@@ -33,12 +33,16 @@ class IngestTests(unittest.TestCase):
     def test_snapshot_and_manifest(self):
         result = self.ingest()
         version = Path(result["version_path"])
-        manifest = json.loads((version / "manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads(
+            (version / "manifest.json").read_text(encoding="utf-8")
+        )
         self.assertFalse(result["duplicate"])
         self.assertEqual(manifest["page_count"], 2)
         self.assertEqual(manifest["sha256"], sha256_file(self.pdf))
         self.assertEqual(manifest["original_filename"], self.pdf.name)
-        self.assertEqual((version / "original.pdf").read_bytes(), self.pdf.read_bytes())
+        self.assertEqual(
+            (version / "original.pdf").read_bytes(), self.pdf.read_bytes()
+        )
         self.assertEqual(list(version.parent.glob(".staging-*")), [])
         self.assertFalse((version.parent / ".ingest.lock").exists())
 

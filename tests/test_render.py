@@ -12,7 +12,12 @@ from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, NameObject
 
 from rag_pipeline.ingest import ingest_document
-from rag_pipeline.render import RenderError, find_office, render_all, render_version
+from rag_pipeline.render import (
+    RenderError,
+    find_office,
+    render_all,
+    render_version,
+)
 
 
 class RenderTests(unittest.TestCase):
@@ -22,7 +27,11 @@ class RenderTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
 
     def ingest(self, path):
-        return Path(ingest_document(path, "example", self.root / "store")["version_path"])
+        return Path(
+            ingest_document(path, "example", self.root / "store")[
+                "version_path"
+            ]
+        )
 
     def pdf(self):
         path = self.root / "test.pdf"
@@ -44,29 +53,50 @@ class RenderTests(unittest.TestCase):
         manifest = result["manifest"]
         self.assertEqual(manifest["page_count"], 2)
         self.assertEqual(manifest["visual_review"], "pending")
-        with Image.open(Path(result["rendition_path"]) / "pages/page_0001.png") as image:
+        with Image.open(
+            Path(result["rendition_path"]) / "pages/page_0001.png"
+        ) as image:
             self.assertEqual(image.size, (200, 100))
-            self.assertEqual(image.convert("RGB").getpixel((50, 50)), (255, 0, 0))
+            self.assertEqual(
+                image.convert("RGB").getpixel((50, 50)), (255, 0, 0)
+            )
         self.assertTrue(render_version(version, dpi=72)["cached"])
-        self.assertNotEqual(result["rendition_path"], render_version(version, dpi=100)["rendition_path"])
-        self.assertEqual(source_manifest, (version / "manifest.json").read_bytes())
+        self.assertNotEqual(
+            result["rendition_path"],
+            render_version(version, dpi=100)["rendition_path"],
+        )
+        self.assertEqual(
+            source_manifest, (version / "manifest.json").read_bytes()
+        )
 
     def test_text_escaping_encoding_and_line_anchors(self):
         path = self.root / "legacy.html"
-        path.write_bytes('<script>alert("Привет")</script>\nsecond\n'.encode("cp1251"))
-        version = Path(ingest_document(path, "text", self.root / "store", encoding="cp1251")["version_path"])
+        path.write_bytes(
+            '<script>alert("Привет")</script>\nsecond\n'.encode("cp1251")
+        )
+        version = Path(
+            ingest_document(
+                path, "text", self.root / "store", encoding="cp1251"
+            )["version_path"]
+        )
         result = render_version(version)
-        preview = (Path(result["rendition_path"]) / "index.html").read_text(encoding="utf-8")
-        self.assertIn('&lt;script&gt;', preview)
-        self.assertNotIn('<script>', preview)
+        preview = (Path(result["rendition_path"]) / "index.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("&lt;script&gt;", preview)
+        self.assertNotIn("<script>", preview)
         self.assertIn('id="L2"', preview)
-        self.assertIn('Привет', preview)
+        self.assertIn("Привет", preview)
         self.assertEqual(result["manifest"]["line_count"], 2)
         self.assertIsNone(result["manifest"]["page_count"])
 
     def test_image_all_frames(self):
         path = self.root / "scan.tiff"
-        Image.new("RGB", (20, 30), "red").save(path, save_all=True, append_images=[Image.new("RGB", (40, 50), "blue")])
+        Image.new("RGB", (20, 30), "red").save(
+            path,
+            save_all=True,
+            append_images=[Image.new("RGB", (40, 50), "blue")],
+        )
         result = render_version(self.ingest(path))
         self.assertEqual(result["manifest"]["frame_count"], 2)
         self.assertEqual(result["manifest"]["items"][1]["width"], 40)
@@ -75,7 +105,9 @@ class RenderTests(unittest.TestCase):
     def test_corrupt_cache_and_source_are_rejected(self):
         version = self.ingest(self.pdf())
         result = render_version(version, 72)
-        (Path(result["rendition_path"]) / "pages/page_0001.png").write_bytes(b"broken")
+        (Path(result["rendition_path"]) / "pages/page_0001.png").write_bytes(
+            b"broken"
+        )
         with self.assertRaisesRegex(RenderError, "damaged"):
             render_version(version, 72)
         (version / "original.pdf").write_bytes(b"changed")
@@ -113,7 +145,9 @@ class RenderTests(unittest.TestCase):
         self.assertEqual(result["total_pdf_pages"], 2)
         self.assertEqual(result["versions_checked"], 2)
         self.assertTrue((self.root / "store/render-index.html").exists())
-        self.assertTrue(list((version / "renders").glob("*/render_manifest.json")))
+        self.assertTrue(
+            list((version / "renders").glob("*/render_manifest.json"))
+        )
 
     def test_office_conversion_integration(self):
         try:
@@ -136,13 +170,19 @@ class RenderTests(unittest.TestCase):
         workbook.close()
         pptx = self.root / "slides.pptx"
         presentation = Presentation()
-        presentation.slides.add_slide(presentation.slide_layouts[0]).shapes.title.text = "Slide content"
+        presentation.slides.add_slide(
+            presentation.slide_layouts[0]
+        ).shapes.title.text = "Slide content"
         presentation.save(pptx)
         for path in (docx, xlsx, pptx):
             with self.subTest(format=path.suffix):
-                result = render_version(self.ingest(path), dpi=72, soffice=str(executable))
+                result = render_version(
+                    self.ingest(path), dpi=72, soffice=str(executable)
+                )
                 self.assertGreater(result["manifest"]["page_count"], 0)
-                self.assertTrue((Path(result["rendition_path"]) / "document.pdf").is_file())
+                self.assertTrue(
+                    (Path(result["rendition_path"]) / "document.pdf").is_file()
+                )
 
 
 if __name__ == "__main__":

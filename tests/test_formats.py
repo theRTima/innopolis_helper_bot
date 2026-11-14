@@ -36,7 +36,10 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(result["manifest"]["format"], "docx")
         self.assertIsNone(result["manifest"]["page_count"])
         self.assertEqual(result["manifest"]["validation"]["table_count"], 1)
-        self.assertEqual((Path(result["version_path"]) / "original.docx").read_bytes(), path.read_bytes())
+        self.assertEqual(
+            (Path(result["version_path"]) / "original.docx").read_bytes(),
+            path.read_bytes(),
+        )
         self.assertTrue(self.ingest(path)["duplicate"])
 
     def test_xlsx_and_pptx(self):
@@ -57,12 +60,19 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(result["manifest"]["validation"]["slide_count"], 1)
 
     def test_text_and_code_are_preserved_without_execution(self):
-        for name, content in (("README.md", "# Title\n\nТекст"), ("script.py", "raise RuntimeError('must not execute')\n"), ("Dockerfile", "FROM python:3.13\n")):
+        for name, content in (
+            ("README.md", "# Title\n\nТекст"),
+            ("script.py", "raise RuntimeError('must not execute')\n"),
+            ("Dockerfile", "FROM python:3.13\n"),
+        ):
             path = self.root / name
             path.write_text(content, encoding="utf-8")
             result = self.ingest(path)
             self.assertEqual(result["manifest"]["source_kind"], "text")
-            saved = Path(result["version_path"]) / result["manifest"]["original_path"]
+            saved = (
+                Path(result["version_path"])
+                / result["manifest"]["original_path"]
+            )
             self.assertEqual(saved.read_bytes(), path.read_bytes())
 
     def test_text_encodings(self):
@@ -70,17 +80,25 @@ class FormatTests(unittest.TestCase):
         path.write_bytes("Привет".encode("cp1251"))
         with self.assertRaises(IngestionError):
             self.ingest(path)
-        self.assertEqual(self.ingest(path, encoding="cp1251")["manifest"]["validation"]["encoding"], "cp1251")
+        self.assertEqual(
+            self.ingest(path, encoding="cp1251")["manifest"]["validation"][
+                "encoding"
+            ],
+            "cp1251",
+        )
         for encoding in ("utf-8-sig", "utf-16", "utf-32"):
             path.write_bytes("Привет".encode(encoding))
-            self.assertEqual(self.ingest(path)["manifest"]["validation"]["character_count"], 6)
+            self.assertEqual(
+                self.ingest(path)["manifest"]["validation"]["character_count"],
+                6,
+            )
 
     def test_structured_text_syntax(self):
         for name, valid, invalid in (
-            ("api.json", '{"x": 1}', '{broken'),
+            ("api.json", '{"x": 1}', "{broken"),
             ("data.jsonl", '{"x": 1}\n{"y": 2}', '{"x": 1}\nbroken'),
-            ("config.toml", 'x = 1', 'x = ['),
-            ("data.xml", '<root/>', '<root>'),
+            ("config.toml", "x = 1", "x = ["),
+            ("data.xml", "<root/>", "<root>"),
         ):
             path = self.root / name
             path.write_text(valid, encoding="utf-8")
@@ -92,7 +110,9 @@ class FormatTests(unittest.TestCase):
     def test_csv_and_image(self):
         csv = self.root / "table.csv"
         csv.write_text('name,value\n"hello\nworld",2\n', encoding="utf-8")
-        self.assertEqual(self.ingest(csv)["manifest"]["validation"]["row_count"], 2)
+        self.assertEqual(
+            self.ingest(csv)["manifest"]["validation"]["row_count"], 2
+        )
         image = self.root / "scan.png"
         Image.new("RGB", (40, 50)).save(image)
         details = self.ingest(image)["manifest"]["validation"]
@@ -110,7 +130,10 @@ class FormatTests(unittest.TestCase):
         path.write_text("plain text", encoding="utf-8")
         with self.assertRaises(IngestionError):
             self.ingest(path)
-        self.assertEqual(self.ingest(path, format_override="text")["manifest"]["format"], "text")
+        self.assertEqual(
+            self.ingest(path, format_override="text")["manifest"]["format"],
+            "text",
+        )
 
     def test_invalid_office_and_dtd(self):
         path = self.root / "fake.docx"
@@ -122,7 +145,10 @@ class FormatTests(unittest.TestCase):
         with self.assertRaises(IngestionError):
             self.ingest(path)
         path = self.root / "entities.xml"
-        path.write_text('<!DOCTYPE root [<!ENTITY x "expanded">]><root>&x;</root>', encoding="utf-8")
+        path.write_text(
+            '<!DOCTYPE root [<!ENTITY x "expanded">]><root>&x;</root>',
+            encoding="utf-8",
+        )
         with self.assertRaises(IngestionError):
             self.ingest(path)
 
