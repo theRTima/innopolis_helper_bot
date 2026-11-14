@@ -11,7 +11,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from app.anchors import Locator, LocatorKind, build_anchor_url
-from app.bot.keyboards import feedback_keyboard, without_feedback_buttons
+from app.bot.keyboards import feedback_keyboard, with_support_button, without_feedback_buttons
 from app.config import Settings
 from app.llm.client import LLMClient
 from app.rag.index import Chunk, SearchIndex
@@ -174,7 +174,7 @@ async def handle_question(
 
 
 @router.callback_query(F.data.startswith("fb:"))
-async def handle_feedback(callback: CallbackQuery, db: Database) -> None:
+async def handle_feedback(callback: CallbackQuery, db: Database, settings: Settings) -> None:
     parts = (callback.data or "").split(":")
     if len(parts) != 3:
         await callback.answer("Некорректная кнопка.")
@@ -192,7 +192,7 @@ async def handle_feedback(callback: CallbackQuery, db: Database) -> None:
         return
 
     try:
-        await db.save_feedback(
+        not_helpful_count = await db.save_feedback(
             question_id=question_id,
             telegram_id=callback.from_user.id,
             value=value,
@@ -203,11 +203,17 @@ async def handle_feedback(callback: CallbackQuery, db: Database) -> None:
         return
 
     await callback.answer(FEEDBACK_MESSAGES[value])
+
     if isinstance(callback.message, Message):
         try:
-            await callback.message.edit_reply_markup(
-                reply_markup=without_feedback_buttons(callback.message.reply_markup)
-            )
+            markup = without_feedback_buttons(callback.message.reply_markup)
+            if (
+                value == "not_helpful"
+                and not_helpful_count >= settings.support_escalation_threshold
+                and settings.support_url
+            ):
+                markup = with_support_button(markup, settings.support_url)
+            await callback.message.edit_reply_markup(reply_markup=markup)
         except Exception:
             logger.debug("Could not remove feedback keyboard", exc_info=True)
 

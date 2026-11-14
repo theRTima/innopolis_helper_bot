@@ -30,6 +30,7 @@ def feedback_keyboard(
 
 
 def without_feedback_buttons(markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup | None:
+    """ Func for inline keyboard"""
     if markup is None:
         return None
     rows = [
@@ -38,3 +39,14 @@ def without_feedback_buttons(markup: InlineKeyboardMarkup | None) -> InlineKeybo
     ]
     rows = [row for row in rows if row]
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+def with_support_button(
+    markup: InlineKeyboardMarkup | None,
+    support_url: str,
+    text: str = "Написать специалисту",
+) -> InlineKeyboardMarkup:
+    """Append a URL button that opens the specialist's chat."""
+
+    rows = [list(row) for row in markup.inline_keyboard] if markup else []
+    rows.append([InlineKeyboardButton(text=text, url=support_url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows)

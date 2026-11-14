@@ -30,6 +30,8 @@ class Settings:
     database_url: str
     documents_base_url: str
     document_link_secret: str
+    support_url: str
+    support_escalation_threshold: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -47,6 +49,8 @@ class Settings:
             database_url=os.getenv("DATABASE_URL", "").strip(),
             documents_base_url=os.getenv("DOCUMENTS_BASE_URL", "").rstrip("/"),
             document_link_secret=os.getenv("DOCUMENT_LINK_SECRET", ""),
+            support_url=os.getenv("SUPPORT_URL", "").strip(),
+            support_escalation_threshold=int(os.getenv("SUPPORT_ESCALATION_THRESHOLD", "5")),
         )
 
     def validate(self) -> None:
@@ -59,3 +63,7 @@ class Settings:
             raise ValueError(
                 "DOCUMENTS_BASE_URL и DOCUMENT_LINK_SECRET должны быть заданы вместе."
             )
+        if self.support_url and not self.support_url.startswith(("https://", "http://", "tg://")):
+            raise ValueError("SUPPORT_URL должен начинаться с https://, http:// или tg://")
+        if self.support_escalation_threshold < 1:
+            raise ValueError("SUPPORT_ESCALATION_THRESHOLD должен быть не меньше 1")

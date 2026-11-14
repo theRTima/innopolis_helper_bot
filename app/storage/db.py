@@ -117,7 +117,7 @@ class Database:
         question_id: int,
         telegram_id: int,
         value: str,
-    ) -> None:
+    ) -> int:
         if value not in ("helpful", "not_helpful"):
             raise ValueError("Некорректная оценка ответа")
         statement = self._insert(
@@ -128,5 +128,9 @@ class Database:
             set_={"value": value, "created_at": func.current_timestamp()},
         )
         async with self.session() as session:
-            await session.execute(statement)
-            await session.commit()
+            async with session.begin():
+                await session.execute(statement)
+                count = await session.scalar(
+                    select(func.count()).select_from(Feedback).where(Feedback.value == "not_helpful")
+                )
+            return int(count or 0)
