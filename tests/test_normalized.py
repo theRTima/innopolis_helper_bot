@@ -158,3 +158,39 @@ def test_new_prompts_receive_normalized_contract():
     assert 'region_id: "doc:4:1"' in analysis_prompt
     assert '"element_id": "e1"' in analysis_prompt
     assert '"page text"' in analysis_prompt
+
+
+def test_finalize_merges_toc_siblings_and_reindexes():
+    chunks = [
+        {
+            "type": "text",
+            "page": 2,
+            "title": "Table of Contents",
+            "content": "Table of Contents\n\n1 Содержание ......... 3",
+            "data": None,
+            "text": "",
+            "id": "old-1",
+            "chunk_index": 0,
+            "_order": 1,
+        },
+        {
+            "type": "text",
+            "page": 2,
+            "title": "Table of Contents",
+            "content": "Table of Contents\n\n2 Схема ......... 4",
+            "data": None,
+            "text": "",
+            "id": "old-2",
+            "chunk_index": 1,
+            "_order": 2,
+        },
+    ]
+    result = norm.finalize_chunks(
+        chunks, document_id="doc", version_id="sha256-abc"
+    )
+    assert len(result) == 1
+    assert "1 Содержание" in result[0]["content"]
+    assert "2 Схема" in result[0]["content"]
+    assert result[0]["chunk_index"] == 0
+    assert result[0]["id"] == "doc:sha256-abc:p2:c0"
+    assert "_order" not in result[0]
