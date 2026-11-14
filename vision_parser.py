@@ -16,13 +16,11 @@ from pathlib import Path
 
 import pymupdf
 from jinja2 import Environment, FileSystemLoader
-from mlx_vlm import generate, load
-from mlx_vlm.prompt_utils import apply_chat_template
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
 
-DEFAULT_PDF = Path("/Users/timur/Downloads/БП Командировка.pdf")
+DEFAULT_PDF = BASE_DIR / "data/knowledge/БП Командировка.pdf"
 MODEL_ID = "mlx-community/gemma-4-e4b-it-4bit"
 DPI = 200
 MAX_TOKENS = 4096
@@ -51,11 +49,16 @@ def get_model():
     """Load the VLM once, on first use."""
     global _model, _processor
     if _model is None:
+        from mlx_vlm import load
+
         _model, _processor = load(MODEL_ID)
     return _model, _processor
 
 
 def run_vision(prompt, image_path):
+    from mlx_vlm import generate
+    from mlx_vlm.prompt_utils import apply_chat_template
+
     model, processor = get_model()
     formatted_prompt = apply_chat_template(
         processor, model.config, prompt, num_images=1

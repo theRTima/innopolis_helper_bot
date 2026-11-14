@@ -1,8 +1,13 @@
 # innopolis_helper_bot
 
-Telegram assistant for the organisation. This repository contains the document
-ingestion layer: it turns internal PDFs into retrieval-ready chunks that the bot
-can use to answer employee questions.
+Telegram assistant for the organisation. The bot currently searches PDF text
+with an in-memory BM25 index; `docling_parser.py` is a separate ingestion
+prototype that produces richer chunks for future indexing.
+
+The vision code uses `mlx_vlm` and an MLX model on Apple Silicon. On Linux,
+the bot can consume prepared `.chunks.jsonl` files; PDFs without one still use
+OpenParse and the local llama.cpp Gemma server. The Docling and vision
+dependencies are intentionally separate from `requirements.txt`.
 
 ## Docling first, vision only when needed
 
@@ -112,8 +117,8 @@ python docling_parser.py "/path/to/document.pdf"
 # specific pages (1-based), useful while testing
 python docling_parser.py "/path/to/document.pdf" --pages 4,7-10
 
-# choose output directory
-python docling_parser.py "/path/to/document.pdf" --out-dir output
+# write next to the matching PDF so the bot uses the prepared chunks on restart
+python docling_parser.py "data/knowledge/БП Командировка.pdf" --out-dir data/knowledge
 ```
 
 `vision_parser.py` can still be run on its own as a vision-only parser, and its

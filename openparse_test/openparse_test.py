@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR.parent / "prompts"
 OUTPUT_DIR = BASE_DIR
 
-PDF_PATH = Path("/Users/timur/Downloads/БП Командировка.pdf")
+PDF_PATH = BASE_DIR.parent / "data/knowledge/БП Командировка.pdf"
 DPI = 150
 MAX_TOKENS = 2048
 CROP_PADDING = 4  # px around a node bbox so glyph edges are not clipped
