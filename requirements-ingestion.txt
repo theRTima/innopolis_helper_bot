@@ -1,5 +1,4 @@
 -r requirements.txt
 docling
 Jinja2
-mlx-vlm
 PyMuPDF

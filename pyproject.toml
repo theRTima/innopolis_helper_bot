@@ -35,7 +35,6 @@ rag-extract = "rag_pipeline.extract:main"
 ingestion = [
     "docling",
     "Jinja2",
-    "mlx-vlm",
     "PyMuPDF",
 ]
 dev = ["flake8>=7,<8", "black>=26,<27"]

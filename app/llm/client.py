@@ -37,10 +37,19 @@ class LLMClient:
         base_url: str,
         model: str,
         api_key: str,
+        session_id: str,
+        user_agent: str,
         max_tokens: int,
         temperature: float,
     ) -> None:
-        self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
+        self._client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key,
+            default_headers={
+                "x-opencode-session": session_id,
+                "User-Agent": user_agent,
+            },
+        )
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature

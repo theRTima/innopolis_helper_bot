@@ -21,6 +21,8 @@ class Settings:
     llm_base_url: str
     llm_model: str
     llm_api_key: str
+    llm_session_id: str
+    llm_user_agent: str
     answer_max_tokens: int
     temperature: float
     top_k: int
@@ -37,11 +39,19 @@ class Settings:
     def from_env(cls) -> "Settings":
         return cls(
             bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
-            llm_base_url=os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1"),
+            llm_base_url=os.getenv(
+                "LLM_BASE_URL", "http://127.0.0.1:8080/v1"
+            ),
             llm_model=os.getenv(
                 "LLM_MODEL", "mlx-community/gemma-4-e2b-it-4bit"
             ),
             llm_api_key=os.getenv("LLM_API_KEY", "local"),
+            llm_session_id=os.getenv(
+                "LLM_SESSION_ID", "innopolis-helper-bot"
+            ).strip(),
+            llm_user_agent=os.getenv(
+                "LLM_USER_AGENT", "innopolis-helper-bot/1.0"
+            ).strip(),
             answer_max_tokens=int(os.getenv("ANSWER_MAX_TOKENS", "600")),
             temperature=float(os.getenv("TEMPERATURE", "0.1")),
             top_k=int(os.getenv("TOP_K", "2")),

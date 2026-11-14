@@ -34,19 +34,8 @@ MAX_CANDIDATES = 25
 
 
 def run_text(prompt: str) -> str:
-    """Run the local VLM without an image, for the grouping stage."""
-    model, processor = vp.get_model()
-    formatted_prompt = vp.apply_chat_template(
-        processor, model.config, prompt, num_images=0
-    )
-    output = vp.generate(
-        model=model,
-        processor=processor,
-        prompt=formatted_prompt,
-        max_tokens=vp.MAX_TOKENS,
-        temperature=0.0,
-    )
-    return getattr(output, "text", None) or str(output)
+    """Run the configured text model for the grouping stage."""
+    return vp.run_text(prompt)
 
 
 def analyze_image(

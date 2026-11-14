@@ -8,20 +8,24 @@ output-file icons -- into chunks for the Telegram assistant.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import mimetypes
 import re
 from pathlib import Path
 
 import pymupdf
 from jinja2 import Environment, FileSystemLoader
-from mlx_vlm import generate, load
-from mlx_vlm.prompt_utils import apply_chat_template
+from openai import OpenAI
+
+from app.config import Settings
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = BASE_DIR / "prompts"
 
-MODEL_ID = "mlx-community/gemma-4-e4b-it-4bit"
+SETTINGS = Settings.from_env()
+MODEL_ID = SETTINGS.llm_model
 DPI = 200
 MAX_TOKENS = 4096
 
@@ -37,8 +41,7 @@ HEADER_LINE_RE = re.compile(
 )
 MAX_CHUNK_CHARS = 2000
 
-_model = None
-_processor = None
+_client: OpenAI | None = None
 
 env = Environment(loader=FileSystemLoader(PROMPTS_DIR))
 # Legacy image -> chunk flow used by the flat ingestion CLI.
@@ -49,28 +52,60 @@ normalized_chunker_prompt = env.get_template("vision_chunker.j2")
 normalized_analysis_prompt = env.get_template("image_analysis.j2")
 
 
-def get_model():
-    """Load the VLM once, on first use."""
-    global _model, _processor
-    if _model is None:
-        _model, _processor = load(MODEL_ID)
-    return _model, _processor
+def get_client() -> OpenAI:
+    """Create the OpenAI-compatible client once, on first use."""
+    global _client
+    if _client is None:
+        _client = OpenAI(
+            base_url=SETTINGS.llm_base_url,
+            api_key=SETTINGS.llm_api_key,
+            default_headers={
+                "x-opencode-session": SETTINGS.llm_session_id,
+                "User-Agent": SETTINGS.llm_user_agent,
+            },
+        )
+    return _client
 
 
-def run_vision(prompt, image_path):
-    model, processor = get_model()
-    formatted_prompt = apply_chat_template(
-        processor, model.config, prompt, num_images=1
-    )
-    output = generate(
-        model=model,
-        processor=processor,
-        prompt=formatted_prompt,
-        image=[str(image_path)],
+def _chat_text(messages: list[dict]) -> str:
+    response = get_client().chat.completions.create(
+        model=MODEL_ID,
+        messages=messages,
         max_tokens=MAX_TOKENS,
         temperature=0.0,
     )
-    return getattr(output, "text", None) or str(output)
+    message = response.choices[0].message
+    return (
+        message.content
+        or getattr(message, "reasoning_content", None)
+        or ""
+    )
+
+
+def run_text(prompt: str) -> str:
+    return _chat_text([{"role": "user", "content": prompt}])
+
+
+def run_vision(prompt: str, image_path) -> str:
+    path = Path(image_path)
+    mime = mimetypes.guess_type(path.name)[0] or "image/png"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return _chat_text(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime};base64,{encoded}"
+                        },
+                    },
+                ],
+            }
+        ]
+    )
 
 
 def parse_json_object(raw):
