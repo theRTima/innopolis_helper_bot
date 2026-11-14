@@ -1,4 +1,4 @@
-"""OpenAI-compatible client for the configured local LLM server."""
+"""OpenAI-compatible client for the configured provider."""
 
 from __future__ import annotations
 
