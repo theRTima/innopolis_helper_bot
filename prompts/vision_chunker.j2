@@ -17,6 +17,15 @@ A detailed analysis of this image is provided below. Treat it as ground truth, e
 {{ analysis }}
 {% endif %}
 
+{% if page_text %}
+A raw text layer extracted from the PDF is below. Use it to fix OCR/spelling mistakes and to read small table cells exactly. Rely on the image for layout, tables, diagrams, forms and screenshots. Ignore boilerplate lines in the text layer.
+{{ page_text }}
+{% endif %}
+
+{% if retry_note %}
+IMPORTANT: {{ retry_note }}
+{% endif %}
+
 Return ONLY a JSON object with this shape:
 
 {
@@ -30,11 +39,14 @@ Return ONLY a JSON object with this shape:
   ]
 }
 
+The top-level object MUST contain the "chunks" array, even when it has only one chunk.
+
 Chunking rules:
 - Cut at semantic boundaries: section headings, paragraphs, tables, diagrams, forms and screenshots.
 - Never split a table, diagram, form, list or screenshot across chunks.
 - Merge a heading into the chunk it introduces. Never return a heading as its own chunk.
 - Aim for 64-1024 tokens per chunk. Split long prose at paragraph boundaries, never mid-sentence.
+- A dense page should produce several chunks, not one giant chunk. Split it by its numbered steps, sub-sections and field groups.
 - Make every chunk understandable on its own: repeat the section title and object names inside content.
 - Do not omit or summarise away details. Preserve numbers, dates, names, field labels, menu paths, filenames, statuses, conditions and exceptions.
 - Keep the original language: Russian text stays Russian.
