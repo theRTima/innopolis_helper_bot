@@ -1,11 +1,9 @@
-# Secrets and local configuration
 .env
 .env.*
 !.env.example
 *.pem
 *.key
 
-# Python
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -16,7 +14,6 @@ htmlcov/
 .venv/
 venv/
 
-# Local model weights and inference runtimes
 .models/
 .local/
 *.gguf
@@ -24,21 +21,16 @@ venv/
 *.onnx
 *.bin
 
-# Source documents are internal/local; keep manifests in Git
-
 data/reference/*.pdf
-
 data/inbox/
-
-# Generated document-processing artifacts
 data/processed/
 data/artifacts/
 data/cache/
 data/eval/generated/
 *.embedding.json
 *.chunks.jsonl
+*.png
 
-# Runtime state
 *.db
 *.sqlite
 *.sqlite3
@@ -47,23 +39,19 @@ logs/
 tmp/
 /storage/
 
-# Qdrant / PostgreSQL / Valkey local volumes
 qdrant_storage/
 postgres_data/
 valkey_data/
 
-# OS and IDE state
 .DS_Store
 Thumbs.db
 .vscode/tmstate.json
 .idea/
 
-# Agent/tool local state
 .agents/skills/*/agents/openai.yaml
 .codex/
 .serena/
 
-# External clones
 vendor/
 .opencode/
 .agents/
