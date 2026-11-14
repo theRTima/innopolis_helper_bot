@@ -45,7 +45,7 @@ data/eval/generated/
 *.log
 logs/
 tmp/
-storage/
+/storage/
 
 # Qdrant / PostgreSQL / Valkey local volumes
 qdrant_storage/
