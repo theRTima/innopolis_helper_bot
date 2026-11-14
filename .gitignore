@@ -14,6 +14,7 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+*.egg-info/
 venv/
 
 # Local model weights and inference runtimes
@@ -37,6 +38,7 @@ data/cache/
 data/eval/generated/
 *.embedding.json
 *.chunks.jsonl
+*.chunks.md
 
 # Runtime state
 *.db
@@ -45,12 +47,8 @@ data/eval/generated/
 *.log
 logs/
 tmp/
-/storage/
-
-# Qdrant / PostgreSQL / Valkey local volumes
-qdrant_storage/
+# PostgreSQL local volume
 postgres_data/
-valkey_data/
 
 # OS and IDE state
 .DS_Store
