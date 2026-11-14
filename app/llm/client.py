@@ -1,4 +1,4 @@
-"""OpenAI-compatible client for the local llama.cpp Gemma server."""
+"""OpenAI-compatible client for the configured local LLM server."""
 
 from __future__ import annotations
 

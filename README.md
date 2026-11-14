@@ -14,19 +14,22 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
-Set `TELEGRAM_BOT_TOKEN` in `.env`. The defaults expect an OpenAI-compatible
-LLM server at `http://127.0.0.1:8080/v1`.
+Set `TELEGRAM_BOT_TOKEN` in `.env`. The bot connects to an OpenAI-compatible
+LLM endpoint at `http://127.0.0.1:8080/v1`; set `LLM_MODEL` to the model served
+by MLX-LM.
 
 ### 2. Start the LLM server
 
-Install `llama.cpp`, then start its server with a GGUF model. Set the alias to
-match `LLM_MODEL` in `.env`:
+Install MLX-LM in the environment where you run the model:
 
 ```bash
-llama-server -m /path/to/model.gguf --alias gemma-4-e2b --host 127.0.0.1 --port 8080
+.venv/bin/python -m pip install mlx-lm
+.venv/bin/mlx_lm.server --model /path/to/mlx-lm-model --host 127.0.0.1 --port 8080
 ```
 
-Keep this running in its own terminal.
+Use your local model path or Hugging Face model ID, and keep the server running
+in its own terminal. Set `LLM_MODEL` in `.env` to the model ID expected by that
+server. The endpoint URL is `LLM_BASE_URL`.
 
 ### 3. Prepare the PDFs
 
