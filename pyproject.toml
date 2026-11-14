@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "innopolis-helper-bot"
+version = "0.1.0"
+description = "Document ingestion for the corporate support RAG pipeline"
+requires-python = ">=3.11"
+dependencies = ["pypdf>=6,<7"]
+
+[project.scripts]
+rag-ingest = "rag_pipeline.ingest:main"
+
+[tool.setuptools.packages.find]
+include = ["rag_pipeline*"]
