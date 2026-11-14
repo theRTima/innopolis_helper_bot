@@ -14,6 +14,7 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+*.egg-info/
 venv/
 
 # Local model weights and inference runtimes
