@@ -1,4 +1,4 @@
-from app.bot.keyboards import feedback_keyboard
+from app.bot.keyboards import feedback_keyboard, without_feedback_buttons
 
 
 def test_feedback_keyboard_callbacks() -> None:
@@ -20,3 +20,12 @@ def test_keyboard_includes_source_link_and_feedback() -> None:
 
     assert markup.inline_keyboard[0][0].url == "https://docs.example/documents/x"
     assert markup.inline_keyboard[1][0].callback_data == "fb:helpful:7"
+
+    after_feedback = without_feedback_buttons(markup)
+    assert after_feedback is not None
+    assert len(after_feedback.inline_keyboard) == 1
+    assert after_feedback.inline_keyboard[0][0].url == "https://docs.example/documents/x"
+
+
+def test_feedback_only_keyboard_disappears_after_vote() -> None:
+    assert without_feedback_buttons(feedback_keyboard(42)) is None

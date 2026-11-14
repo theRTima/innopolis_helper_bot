@@ -11,7 +11,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from app.anchors import Locator, LocatorKind, build_anchor_url
-from app.bot.keyboards import feedback_keyboard
+from app.bot.keyboards import feedback_keyboard, without_feedback_buttons
 from app.config import Settings
 from app.llm.client import LLMClient
 from app.rag.index import Chunk, SearchIndex
@@ -203,9 +203,11 @@ async def handle_feedback(callback: CallbackQuery, db: Database) -> None:
         return
 
     await callback.answer(FEEDBACK_MESSAGES[value])
-    if callback.message is not None:
+    if isinstance(callback.message, Message):
         try:
-            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.edit_reply_markup(
+                reply_markup=without_feedback_buttons(callback.message.reply_markup)
+            )
         except Exception:
             logger.debug("Could not remove feedback keyboard", exc_info=True)
 

@@ -27,3 +27,14 @@ def feedback_keyboard(
             ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def without_feedback_buttons(markup: InlineKeyboardMarkup | None) -> InlineKeyboardMarkup | None:
+    if markup is None:
+        return None
+    rows = [
+        [button for button in row if not (button.callback_data or "").startswith("fb:")]
+        for row in markup.inline_keyboard
+    ]
+    rows = [row for row in rows if row]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
