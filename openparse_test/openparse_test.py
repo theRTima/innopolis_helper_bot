@@ -15,7 +15,6 @@ PROMPTS_DIR = BASE_DIR.parent / "prompts"
 OUTPUT_DIR = BASE_DIR
 
 PDF_PATH = Path("/Users/timur/Downloads/БП Командировка.pdf")
-NUM_PAGES = 3
 DPI = 150
 MAX_TOKENS = 2048
 CROP_PADDING = 4  # px around a node bbox so glyph edges are not clipped
@@ -77,21 +76,15 @@ def render_node(doc, node, node_index):
 
 def main():
     doc = pymupdf.open(PDF_PATH)
-    pages = min(NUM_PAGES, doc.page_count)
 
-    for page_index in range(pages):
+    for page_index in range(doc.page_count):
         page = doc.load_page(page_index)
         page.get_pixmap(dpi=DPI).save(OUTPUT_DIR / f"page_{page_index + 1}.png")
 
-    # Keep only the pages we compare so openparse does not parse the whole document.
-    doc.select(range(pages))
-    cropped_path = OUTPUT_DIR / PDF_PATH.name
-    doc.save(cropped_path)
     doc.close()
 
-    parsed_doc = parser.parse(str(cropped_path))
-
-    render_doc = pymupdf.open(cropped_path)
+    parsed_doc = parser.parse(str(PDF_PATH))
+    render_doc = pymupdf.open(PDF_PATH)
     sections = []
 
     for node_index, node in enumerate(parsed_doc.nodes):
