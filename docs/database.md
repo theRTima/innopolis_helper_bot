@@ -1,22 +1,31 @@
-# База данных бота
+# Bot database
 
-## Сейчас
+The database stores bot activity and the active, parsed document chunks. The
+bot builds its in-memory BM25 index from active `DocumentVersion` rows and their
+`Chunk` records. For documents without an active database version, it loads
+chunks from the offline JSONL and versioned-file indexes in `CHUNKS_DIR` and
+`DOCUMENTS_DIR`.
+The ingestion CLI writes JSONL artifacts for inspection and imports complete
+document parses into the relational tables.
 
-Бот использует SQLAlchemy 2 с асинхронными сессиями. При старте Alembic применяет миграции. По умолчанию это локальная SQLite (`DATABASE_PATH`); для PostgreSQL задаётся `DATABASE_URL=postgresql+asyncpg://...`. Файл SQLite и локальные настройки находятся в `.gitignore`.
+By default, the bot uses asynchronous SQLite at `storage/bot.db`, overridden
+by `DATABASE_PATH`. PostgreSQL remains available through `DATABASE_URL`. Alembic
+applies migrations at startup. Existing `questions` and `feedback` rows are
+preserved when the schema is initialized.
 
-Первая миграция сохраняет уже существующие таблицы `questions` и `feedback` вместе с их строками. Новые вопросы пишутся одной транзакцией в `users`, `conversations`, `messages`, `answers` и `questions`. Кнопка оценки обновляет `feedback` по паре «вопрос, пользователь». Старые записи остаются в исходных таблицах; их перенос в новые таблицы при необходимости можно сделать отдельной миграцией после проверки данных.
+Each question is stored with its answer and cited sources. User, conversation
+and message rows keep the interaction history; feedback is upserted by question
+and Telegram user. Document versions are retained when a source changes, while
+the bot retrieves from only the active version. `Chunk.text` is used for BM25;
+`Chunk.content`, `title` and `data` preserve context for the answer model.
 
-Таблицы `documents`, `document_versions`, `chunks` и `citations` подготовлены для следующего этапа: загрузка документов с версиями и сохранение точных источников ответа. Сейчас поиск читает файлы напрямую, поэтому цитаты ещё не записываются в эту схему. Qdrant будет хранить поисковый индекс, а PostgreSQL — текст, версию и локатор чанка. Redis для очереди и ограничения запросов здесь пока не подключён.
-
-## Команды
+Install the runtime dependencies and inspect migrations with:
 
 ```bash
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m alembic upgrade head
 .venv/bin/python -m alembic current
-.venv/bin/python -m pytest -q tests/test_db.py
 ```
 
-Для PostgreSQL сначала создать базу и указать `DATABASE_URL` в `.env`. CLI Alembic читает переменные окружения напрямую; для запуска из терминала можно экспортировать `DATABASE_URL`. Приложение читает `.env` через `app.config`.
-
-Перед первым переходом существующей SQLite-базы на миграции стоит сохранить копию `storage/bot.db`; миграция сама не удаляет старые строки.
+Before moving an existing SQLite database, back it up. Its default location is
+`storage/bot.db`; `DATABASE_URL` can be used to configure PostgreSQL instead.

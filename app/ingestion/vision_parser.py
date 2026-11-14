@@ -1,42 +1,33 @@
-"""Vision-as-parser: turn a PDF into machine-usable RAG chunks.
+"""Vision-only alternative for turning a PDF into machine-usable RAG chunks.
 
-Unlike the openparse prototype, this script does not rely on text/layout parsing
-or embedding-based semantic segmentation. The vision model itself decides where
-one semantic chunk ends and the next begins, and transcribes all content --
-including diagrams, screenshots, forms and output-file icons -- into chunks that
-a Telegram assistant can retrieve and answer questions from.
+The vision model decides where one semantic chunk ends and the next begins, and
+transcribes all content -- including diagrams, screenshots, forms and
+output-file icons -- into chunks for the Telegram assistant.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
 import json
-import os
+import mimetypes
 import re
-import sys
 from pathlib import Path
 
 import pymupdf
-from dotenv import load_dotenv
 from jinja2 import Environment, FileSystemLoader
-
-# engine for ai models
 from openai import OpenAI
 
-BASE_DIR = Path(__file__).resolve().parent
-PROMPTS_DIR = BASE_DIR / "prompts"
-load_dotenv(BASE_DIR / ".env")
+from app.config import Settings
 
-DEFAULT_PDF = BASE_DIR / "data/knowledge/БП Командировка.pdf"
-VISION_BACKEND = os.getenv("VISION_BACKEND", "mlx" if sys.platform == "darwin" else "llama_cpp")
-MODEL_ID = os.getenv(
-    "VISION_MODEL",
-    "mlx-community/gemma-4-e4b-it-4bit"
-)
+BASE_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parents[2]
+PROMPTS_DIR = BASE_DIR / "prompts"
+
+SETTINGS = Settings.from_env()
+MODEL_ID = SETTINGS.llm_model
 DPI = 200
-MAX_TOKENS = int(os.getenv("VISION_MAX_TOKENS", "4096" if VISION_BACKEND == "mlx" else "1200"))
+MAX_TOKENS = 8192
 
 # An embedded image is treated as document content if it covers this share of
 # the page. Small logos/icons are ignored.
@@ -50,70 +41,71 @@ HEADER_LINE_RE = re.compile(
 )
 MAX_CHUNK_CHARS = 2000
 
-_model = None
-_processor = None
+_client: OpenAI | None = None
 
 env = Environment(loader=FileSystemLoader(PROMPTS_DIR))
-chunker_prompt = env.get_template("vision_chunker.j2")
-analysis_prompt = env.get_template("image_analysis.j2")
+# Legacy image -> chunk flow used by the flat ingestion CLI.
+chunker_prompt = env.get_template("legacy/vision_chunker.j2")
+analysis_prompt = env.get_template("legacy/image_analysis.j2")
+# Normalized-element flow used by rag_pipeline.extract.
+normalized_chunker_prompt = env.get_template("vision_chunker.j2")
+normalized_analysis_prompt = env.get_template("image_analysis.j2")
 
 
-def get_model():
-    """Load the VLM once, on first use."""
-    global _model, _processor
-    if _model is None:
-        from mlx_vlm import load
+def get_client() -> OpenAI:
+    """Create the OpenAI-compatible client once, on first use."""
+    global _client
+    if _client is None:
+        _client = OpenAI(
+            base_url=SETTINGS.llm_base_url,
+            api_key=SETTINGS.llm_api_key,
+            default_headers={
+                "x-opencode-session": SETTINGS.llm_session_id,
+                "User-Agent": SETTINGS.llm_user_agent,
+            },
+        )
+    return _client
 
-        _model, _processor = load(MODEL_ID)
-    return _model, _processor
 
-
-def run_vision(prompt, image_path):
-    if VISION_BACKEND == "llama_cpp":
-        
-
-        image = base64.b64encode(Path(image_path).read_bytes()).decode("ascii")
-        with OpenAI(
-            base_url=os.getenv("VISION_BASE_URL", os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1")),
-            api_key=os.getenv("LLM_API_KEY", "local"),
-            timeout=600,
-            max_retries=1,
-        ) as client:
-            response = client.chat.completions.create(
-                model=MODEL_ID,
-                messages=[
-                    {
-
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{image}"}},
-                        ],
-                    }
-                ],
-                max_tokens=MAX_TOKENS,
-                temperature=0,
-            )
-        message = response.choices[0].message
-        return (message.content or getattr(message, "reasoning_content", None) or "").strip()
-
-    if VISION_BACKEND != "mlx":
-        raise ValueError(f"Неизвестный VISION_BACKEND: {VISION_BACKEND}")
-    from mlx_vlm import generate
-    from mlx_vlm.prompt_utils import apply_chat_template
-
-    model, processor = get_model()
-    formatted_prompt = apply_chat_template(
-        processor, model.config, prompt, num_images=1
-    )
-    output = generate(
-        model=model,
-        processor=processor,
-        prompt=formatted_prompt,
-        image=[str(image_path)],
+def _chat_text(messages: list[dict]) -> str:
+    response = get_client().chat.completions.create(
+        model=MODEL_ID,
+        messages=messages,
         max_tokens=MAX_TOKENS,
         temperature=0.0,
     )
-    return getattr(output, "text", None) or str(output)
+    message = response.choices[0].message
+    return (
+        message.content
+        or getattr(message, "reasoning_content", None)
+        or ""
+    )
+
+
+def run_text(prompt: str) -> str:
+    return _chat_text([{"role": "user", "content": prompt}])
+
+
+def run_vision(prompt: str, image_path) -> str:
+    path = Path(image_path)
+    mime = mimetypes.guess_type(path.name)[0] or "image/png"
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return _chat_text(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime};base64,{encoded}"
+                        },
+                    },
+                ],
+            }
+        ]
+    )
 
 
 def parse_json_object(raw):
@@ -219,6 +211,9 @@ def extract_chunks(
         raw_chunks = [parsed]
     chunks = normalize_chunks(raw_chunks, pdf_name, page_number, mode, start_index)
 
+    # A valid empty chunks array means the model found no meaningful content.
+    if raw_chunks is not None:
+        return chunks
     if chunks:
         return chunks
 
@@ -295,11 +290,9 @@ def postprocess_page_chunks(chunks, pdf_name, page_number):
             continue
 
         if pending_headings:
-            heading = pending_headings.pop(0)["content"].strip()
-            chunk["title"] = heading
-            chunk["content"] = f"{heading}\n\n{chunk['content']}".strip()
-            for extra in pending_headings:
-                chunk["content"] = f"{extra['content']}\n\n{chunk['content']}"
+            headings = [item["content"].strip() for item in pending_headings]
+            chunk["title"] = headings[0]
+            chunk["content"] = "\n\n".join([*headings, chunk["content"]]).strip()
             pending_headings = []
 
         merged.append(chunk)
@@ -369,30 +362,43 @@ def find_content_images(page):
 
 def parse_pages(spec, page_count):
     """Parse a 1-based page selection such as ``4`` or ``4,7-9``."""
-    if not spec:
+    if spec is None or not spec.strip():
         return list(range(page_count))
 
     selected = set()
     for part in spec.split(","):
         part = part.strip()
         if not part:
-            continue
+            raise ValueError(f"Invalid page selection: {spec!r}")
         if "-" in part:
-            start, end = part.split("-", 1)
-            selected.update(range(int(start) - 1, int(end)))
+            bounds = part.split("-")
+            if (
+                len(bounds) != 2
+                or not all(bound.isdecimal() for bound in bounds)
+            ):
+                raise ValueError(f"Invalid page range: {part!r}")
+            start, end = map(int, bounds)
+            if start < 1 or end < start or end > page_count:
+                raise ValueError(
+                    f"Page range {part!r} is outside 1-{page_count} or reversed"
+                )
+            selected.update(range(start - 1, end))
         else:
-            selected.add(int(part) - 1)
+            if not part.isdecimal():
+                raise ValueError(f"Invalid page number: {part!r}")
+            page = int(part)
+            if page < 1 or page > page_count:
+                raise ValueError(f"Page {page} is outside 1-{page_count}")
+            selected.add(page - 1)
 
-    return [page for page in sorted(selected) if 0 <= page < page_count]
+    return sorted(selected)
 
 
-def write_outputs(chunks, pdf_path, out_dir, *, complete=True):
+def write_outputs(chunks, pdf_path, out_dir):
     jsonl_path = out_dir / f"{pdf_path.stem}.chunks.jsonl"
-    temporary_jsonl = jsonl_path.with_suffix(jsonl_path.suffix + ".tmp")
-    with temporary_jsonl.open("w", encoding="utf-8") as handle:
+    with jsonl_path.open("w", encoding="utf-8") as handle:
         for chunk in chunks:
             handle.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-    temporary_jsonl.replace(jsonl_path)
 
     md_path = out_dir / f"{pdf_path.stem}.chunks.md"
     sections = []
@@ -402,21 +408,6 @@ def write_outputs(chunks, pdf_path, out_dir, *, complete=True):
             header += f" — {chunk['title']}"
         sections.append(f"{header}\n\n{chunk['content']}")
     md_path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
-
-    meta_path = out_dir / f"{pdf_path.stem}.chunks.meta.json"
-    temporary_meta = meta_path.with_suffix(meta_path.suffix + ".tmp")
-    temporary_meta.write_text(
-        json.dumps(
-            {
-                "source_sha256": hashlib.sha256(pdf_path.read_bytes()).hexdigest(),
-                "chunks_sha256": hashlib.sha256(jsonl_path.read_bytes()).hexdigest(),
-                "chunk_count": len(chunks),
-                "complete": complete,
-            }
-        ),
-        encoding="utf-8",
-    )
-    temporary_meta.replace(meta_path)
 
     return jsonl_path, md_path
 
@@ -430,7 +421,11 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
         pages_spec: Optional 1-based page selection, e.g. "4" or "4,7-9".
     """
     pdf_path = Path(pdf_path).expanduser().resolve()
-    out_dir = Path(out_dir).expanduser().resolve() if out_dir else BASE_DIR
+    out_dir = (
+        Path(out_dir).expanduser().resolve()
+        if out_dir
+        else PROJECT_DIR / "data" / "processed"
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     chunks = []
@@ -521,7 +516,7 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
         for image_path in created_images:
             image_path.unlink(missing_ok=True)
 
-    jsonl_path, md_path = write_outputs(chunks, pdf_path, out_dir, complete=pages_spec is None)
+    jsonl_path, md_path = write_outputs(chunks, pdf_path, out_dir)
     print(f"Saved {len(chunks)} chunks to {jsonl_path}")
     print(f"Human-readable preview: {md_path}")
     return chunks
@@ -531,9 +526,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Parse a PDF into vision-generated RAG chunks."
     )
-    parser.add_argument("pdf", nargs="?", default=str(DEFAULT_PDF), help="PDF path")
+    parser.add_argument("pdf", help="PDF path")
     parser.add_argument(
-        "--out-dir", default=None, help="Output directory (default: repo root)"
+        "--out-dir", default=None, help="Output directory (default: data/processed)"
     )
     parser.add_argument(
         "--pages",

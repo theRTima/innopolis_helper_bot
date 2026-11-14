@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pymupdf
 
-import vision_parser as vision
+from app.ingestion import vision_parser as vision
 
 MIN_PAGE_TEXT = 30
 

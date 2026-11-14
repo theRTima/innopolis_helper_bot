@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import hashlib
 import logging
 import math
 import re
@@ -29,11 +28,14 @@ class Chunk:
     page_from: int
     page_to: int
     text: str
+    document_id: str | None = None
+    version_id: str | None = None
     title: str = ""
-    content: str | None = None
+    chunk_type: str = "text"
+    origin: str = "docling"
     data: object = None
-    origin: str = "openparse"
-    kind: str = "text"
+    content: str | None = None
+    locator: dict | None = None
 
     @property
     def page_label(self) -> str:
@@ -48,7 +50,10 @@ class Chunk:
         parts = [self.title] if self.title and self.title not in self.content else []
         parts.append(self.content)
         if self.data is not None:
-            parts.append("Структурированные данные: " + json.dumps(self.data, ensure_ascii=False))
+            parts.append(
+                "Структурированные данные: "
+                + json.dumps(self.data, ensure_ascii=False)
+            )
         return "\n".join(parts)
 
 
@@ -56,74 +61,157 @@ def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
 
 
-def load_chunks(knowledge_dir: Path) -> list[Chunk]:
-    """Use prepared JSONL chunks when available, otherwise parse PDF text."""
-
-    import openparse
-
+def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
     chunks: list[Chunk] = []
-    parser = openparse.DocumentParser()
-    for pdf in sorted(knowledge_dir.glob("*.pdf")):
-        prepared = knowledge_dir / f"{pdf.stem}.chunks.jsonl"
-        meta_path = knowledge_dir / f"{pdf.stem}.chunks.meta.json"
-        if prepared.is_file() and meta_path.is_file():
+    with chunks_path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
             try:
-                meta = json.loads(meta_path.read_text(encoding="utf-8"))
-                checksum = hashlib.sha256(pdf.read_bytes()).hexdigest()
-                if meta["source_sha256"] != checksum:
-                    raise ValueError("PDF изменился после обработки")
-                if not meta["complete"] or meta["chunks_sha256"] != hashlib.sha256(prepared.read_bytes()).hexdigest():
-                    raise ValueError("Неполный или изменённый набор чанков")
-                prepared_chunks = []
-                for line_number, line in enumerate(prepared.read_text(encoding="utf-8").splitlines(), 1):
-                    if not line.strip():
-                        continue
-                    item = json.loads(line)
-                    page = int(item["page"])
-                    if page < 1 or not item["text"].strip():
-                        raise ValueError(f"Некорректный чанк в строке {line_number}")
-                    prepared_chunks.append(
-                        Chunk(
-                            chunk_id=str(item["id"]),
-                            document=pdf.stem,
-                            page_from=page,
-                            page_to=page,
-                            text=str(item["text"]),
-                            title=str(item.get("title") or ""),
-                            content=item.get("content"),
-                            data=item.get("data"),
-                            origin=str(item.get("origin") or "vision"),
-                            kind=str(item.get("type") or "text"),
-                        )
-                    )
-                if len(prepared_chunks) != meta["chunk_count"] or not prepared_chunks:
-                    raise ValueError("Не совпадает количество чанков")
-            except (AttributeError, KeyError, TypeError, ValueError) as error:
-                logger.warning("Игнорирую %s: %s", prepared, error)
-            else:
-                chunks.extend(prepared_chunks)
-                continue
-        elif prepared.is_file():
-            logger.warning("Игнорирую %s: нет метаданных о версии PDF", prepared)
-        document = parser.parse(pdf)
-        for index, node in enumerate(document.nodes):
-            text = node.text.strip()
-            if not text:
-                continue
+                item = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: invalid JSON"
+                ) from error
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: expected a JSON object"
+                )
+
+            chunk_id = item.get("id")
+            source = item.get("source")
+            page = item.get("page")
+            text = item.get("text")
+            if not isinstance(chunk_id, str) or not chunk_id.strip():
+                raise ValueError(f"{chunks_path}:{line_number}: missing chunk id")
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError(f"{chunks_path}:{line_number}: missing source")
+            if type(page) is not int or page < 1:
+                raise ValueError(f"{chunks_path}:{line_number}: invalid page")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"{chunks_path}:{line_number}: missing search text")
+
+            page_to = item.get("page_to", page)
+            if type(page_to) is not int or page_to < page:
+                page_to = page
             chunks.append(
                 Chunk(
-                    chunk_id=f"{pdf.stem}-{index}",
-                    document=pdf.stem,
-                    page_from=node.start_page,
-                    page_to=node.end_page,
-                    text=text,
+                    chunk_id=chunk_id,
+                    document=Path(source).stem,
+                    page_from=page,
+                    page_to=page_to,
+                    text=text.strip(),
+                    document_id=item.get("document_id"),
+                    version_id=item.get("version_id"),
+                    title=str(item.get("title") or ""),
+                    chunk_type=str(item.get("type") or "text"),
+                    origin=str(item.get("origin") or "docling"),
+                    data=item.get("data"),
+                    content=(
+                        str(item["content"])
+                        if item.get("content") is not None
+                        else None
+                    ),
+                    locator=item.get("locator")
+                    if isinstance(item.get("locator"), dict)
+                    else None,
                 )
             )
     return chunks
 
 
+def load_chunks(chunks_dir: Path) -> list[Chunk]:
+    """Load flat Docling/Vision JSONL chunks (legacy layout)."""
+    chunks: list[Chunk] = []
+    for chunks_path in sorted(chunks_dir.glob("*.chunks.jsonl")):
+        chunks.extend(_read_chunk_file(chunks_path))
+    return chunks
+
+
+def _latest_chunk_manifest(version_path: Path) -> Path | None:
+    candidates: list[tuple[str, Path]] = []
+    for manifest_path in version_path.glob("chunks/*/chunk_manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("status") != "ready":
+            continue
+        candidates.append(
+            (str(manifest.get("created_at", "")), manifest_path)
+        )
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
+    """Load the newest ready chunk set from the versioned rag_pipeline store."""
+    best: dict[str, tuple[str, Path]] = {}
+    for manifest_path in documents_root.glob("*/sha256-*/manifest.json"):
+        try:
+            source_manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        document_id = source_manifest.get("document_id")
+        if not isinstance(document_id, str):
+            continue
+        chunk_manifest_path = _latest_chunk_manifest(manifest_path.parent)
+        if chunk_manifest_path is None:
+            continue
+        try:
+            chunk_manifest = json.loads(
+                chunk_manifest_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        created = str(chunk_manifest.get("created_at", ""))
+        chunks_file = chunk_manifest_path.parent / "chunks.jsonl"
+        if not chunks_file.is_file():
+            continue
+        current = best.get(document_id)
+        if current is None or (created, str(chunks_file)) > (
+            current[0],
+            str(current[1]),
+        ):
+            best[document_id] = (created, chunks_file)
+
+    chunks: list[Chunk] = []
+    for _created, chunks_file in best.values():
+        chunks.extend(_read_chunk_file(chunks_file))
+    return chunks
+
+
+def load_chunks_auto(
+    chunks_dir: Path, documents_root: Path
+) -> tuple[list[Chunk], str]:
+    """Prefer the versioned store and fill in flat chunks for other documents."""
+    versioned = load_versioned_chunks(documents_root)
+    if not versioned:
+        return load_chunks(chunks_dir), "flat"
+
+    covered = {chunk.document for chunk in versioned}
+    additions = [
+        chunk for chunk in load_chunks(chunks_dir) if chunk.document not in covered
+    ]
+    if additions:
+        return versioned + additions, "mixed"
+    return versioned, "versioned"
+
+
+def chunk_source_mismatches(
+    chunks: list[Chunk], knowledge_dir: Path
+) -> tuple[list[str], list[str]]:
+    """Return PDFs without chunks and chunk sources without a matching PDF."""
+    pdf_sources = {path.stem for path in knowledge_dir.glob("*.pdf")}
+    chunk_sources = {chunk.document for chunk in chunks}
+    return sorted(pdf_sources - chunk_sources), sorted(chunk_sources - pdf_sources)
+
+
 async def load_chunks_from_database(database: Database) -> list[Chunk]:
-    """Load chunks belonging to each document's active version."""
+    """Load chunks only from the active version of each relational document."""
     statement = (
         select(Document, DocumentVersion, StoredChunk)
         .join(DocumentVersion, DocumentVersion.document_id == Document.id)
@@ -131,44 +219,45 @@ async def load_chunks_from_database(database: Database) -> list[Chunk]:
         .where(DocumentVersion.version == Document.active_version)
         .order_by(Document.slug, StoredChunk.ordinal)
     )
-
     async with database.session() as session:
         rows = (await session.execute(statement)).all()
 
     chunks: list[Chunk] = []
-    for document, version, stored_chunk in rows:
-        if stored_chunk.locator_kind != "pdf_page":
+    for document, version, stored in rows:
+        if stored.locator_kind != "pdf_page":
             logger.warning(
                 "Пропускаю чанк %s: неподдерживаемый локатор %s",
-                stored_chunk.id,
-                stored_chunk.locator_kind,
+                stored.id,
+                stored.locator_kind,
             )
             continue
         try:
-            page = int(stored_chunk.locator_value)
+            page = int(stored.locator_value)
         except (TypeError, ValueError):
-            logger.warning("Пропускаю чанк %s: некорректная страница", stored_chunk.id)
+            logger.warning("Пропускаю чанк %s: некорректная страница", stored.id)
             continue
-
         chunks.append(
             Chunk(
-                chunk_id=stored_chunk.external_id or f"{document.slug}-v{version.version}-{stored_chunk.ordinal}",
+                chunk_id=stored.external_id or f"{document.slug}-v{version.version}-{stored.ordinal}",
                 document=document.slug,
                 page_from=page,
                 page_to=page,
-                text=stored_chunk.text,
-                title=stored_chunk.title or "",
-                content=stored_chunk.content,
-                data=stored_chunk.data,
-                origin=stored_chunk.origin or "database",
-                kind=stored_chunk.chunk_type or "text",
+                text=stored.text,
+                document_id=str(document.id),
+                version_id=str(version.id),
+                title=stored.title or "",
+                chunk_type=stored.chunk_type or "text",
+                origin=stored.origin or "database",
+                data=stored.data,
+                content=stored.content,
+                locator={"kind": stored.locator_kind, "value": stored.locator_value},
             )
         )
     return chunks
 
 
 class SearchIndex:
-    """Okapi BM25 over open-parse nodes; easy to replace with Qdrant later."""
+    """Okapi BM25 over preprocessed Docling/Vision chunks."""
 
     def __init__(
         self,

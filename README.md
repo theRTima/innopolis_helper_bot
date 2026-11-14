@@ -1,199 +1,419 @@
-# innopolis_helper_bot
+# Innopolis Helper Bot
 
-Telegram assistant for the organisation. The bot searches PDF chunks with an
-in-memory BM25 index. Chunks are prepared offline by `scripts/ingest.py`, which
-uses `docling_parser.py` when Docling is installed and otherwise falls back to
-the lighter PyMuPDF pipeline in `app/ingest/light.py`. Both paths reuse
-`vision_parser.py` for pictures and image-only pages.
+Telegram assistant that answers employee questions from internal documentation.
 
-The vision code supports `mlx_vlm` on Apple Silicon and the local llama.cpp
-Gemma server on Linux. The bot consumes prepared `.chunks.jsonl` files; a PDF
-without one is parsed with OpenParse at startup as a legacy fallback. Docling
-and MLX dependencies are intentionally separate from `requirements.txt`.
+The repository contains both:
 
-## Docling first, vision only when needed
+- the Telegram bot and BM25 retrieval layer;
+- the document ingestion pipeline that turns PDF, Office, image and text files
+  into retrieval-ready chunks.
 
-The documents contain normal text and tables, but also process diagrams,
-screenshots of internal systems, forms and output-file icons. A pure text parser
-skips the non-text parts; a pure vision parser is slower and can misread dense
-text.
+The pipeline uses **Docling** for text, tables and document structure, and a
+**remote multimodal model** for diagrams, screenshots and unreadable pages. No
+local MLX model is required.
 
-`docling_parser.py` therefore uses a hybrid pipeline:
+## Requirements
 
-- **Docling** reads the document the normal way: text, lists, headings, reading
-  order and table structure.
-- **The vision model** is used only where Docling cannot produce usable content:
-  pictures/diagrams and pages with no readable text layer.
+- Python 3.11+
+- A Telegram bot token from @BotFather
+- An OpenAI-compatible model endpoint
+- A multimodal model for PDF/image ingestion
+- LibreOffice only for Office previews and Office extraction
 
-The result is one JSONL file of self-contained chunks, with text, tables and
-diagrams all represented in a machine-usable form.
+Python dependencies are split into:
 
-## Pipeline
+| File | Purpose |
+| --- | --- |
+| `requirements.txt` | Bot, database, retrieval and API dependencies |
+| `requirements-ingestion.txt` | Docling, Jinja2, PyMuPDF |
+| `requirements-dev.txt` | Test and lint dependencies |
 
-1. **Docling conversion.** `DocumentConverter` parses the selected page range.
-   It extracts text, headings, lists, tables and picture regions.
-2. **Noise filtering.** Running headers/footers (`FURNITURE`) are dropped, as are
-   the OCR text items Docling creates *inside* pictures — those are usually
-   garbage (`"BunoneO"`, `"Cornacoae"`) and are replaced by real vision analysis.
-3. **Text chunking.** Tables are removed from the chunker input and
-   `HybridChunker` splits the remaining text/list content. Each chunk gets the
-   nearest section heading, a page number and a stable id.
-4. **Table chunks.** Each real table becomes one chunk with a clean markdown
-   rendering in `content` and machine-readable `columns` / `rows` in `data`.
-   This avoids the default table serialisation, which loses the row structure.
-   A paragraph or a two-column layout that Docling misdetects as a table is
-   emitted as ordinary text instead of fake columns.
-5. **Picture chunks.** Every `PictureItem` is matched to its embedded image in
-   the source PDF and extracted at **native resolution** (falling back to a
-   region render if there is no embedded bitmap). It then goes through
-   `prompts/image_analysis.j2` and `prompts/vision_chunker.j2`. Diagrams are
-   stored as a readable explanation plus graph data (`nodes` / `edges`).
-6. **Page fallback.** A page with less than `MIN_PAGE_TEXT` readable characters,
-   no table and no picture is rendered and sent to the vision chunker as a
-   whole page.
-7. **Merge and clean.** Text, table and vision chunks are merged in page and
-   reading order. Headers/footers, export stamps and the artificial Word heading
-   error are removed; heading-only chunks are merged into the chunk they
-   introduce; oversized text chunks are split at line boundaries.
-8. **Write outputs.** Chunks are written to `<name>.chunks.jsonl` (for the bot /
-   vector index) and `<name>.chunks.md` (for debugging by humans).
+## 1. Install
 
-All temporary PNGs are deleted after the run, even on failure.
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements-ingestion.txt
+```
 
-## Chunk schema
+If the environment has no `pip`, install with `uv` instead:
+
+```bash
+uv pip install --python .venv/bin/python -e .
+uv pip install --python .venv/bin/python -r requirements.txt
+uv pip install --python .venv/bin/python -r requirements-ingestion.txt
+```
+
+## 2. Configure `.env`
+
+```bash
+cp .env.example .env
+```
+
+Minimum configuration:
+
+```env
+TELEGRAM_BOT_TOKEN=...
+
+LLM_BASE_URL=http://127.0.0.1:8080/v1
+LLM_MODEL=gemma-4-e2b
+LLM_API_KEY=local
+
+# Optional provider routing headers
+LLM_SESSION_ID=innopolis-helper-bot
+LLM_USER_AGENT=innopolis-helper-bot/1.0
+```
+
+The same model settings are used by:
+
+- the bot for answer generation;
+- `app.ingestion` for diagrams and page fallback;
+- `rag_pipeline.extract` for the normalized vision pipeline.
+
+The model must support **image input** for document extraction. A text-only
+model can answer questions from existing chunks but cannot process new PDFs or
+images.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | — | Telegram bot token |
+| `LLM_BASE_URL` | local fallback | OpenAI-compatible base URL, usually ending in `/v1` |
+| `LLM_MODEL` | `gemma-4-e2b` | Model name exposed by the OpenAI-compatible endpoint |
+| `LLM_API_KEY` | `local` | Provider API key |
+| `LLM_SESSION_ID` | `innopolis-helper-bot` | Stable routing/session header |
+| `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Client identification |
+| `ANSWER_MAX_TOKENS` | `600` | Answer generation limit |
+| `TEMPERATURE` | `0.1` | Answer generation temperature |
+| `TOP_K` | `2` | Number of chunks passed to the LLM |
+| `MIN_SCORE` | `0` | Minimum BM25 score |
+| `KNOWLEDGE_DIR` | `data/knowledge` | Source PDF directory for the legacy flat pipeline |
+| `CHUNKS_DIR` | `data/processed` | Legacy flat chunk directory |
+| `DOCUMENTS_DIR` | `data/processed/documents` | Versioned `rag_pipeline` store |
+| `DATABASE_PATH` | `storage/bot.db` | SQLite path |
+| `DATABASE_URL` | — | Optional PostgreSQL URL |
+| `DOCUMENTS_BASE_URL` | — | Public viewer URL for signed source links |
+| `DOCUMENT_LINK_SECRET` | — | HMAC secret for source links |
+
+`LLM_SESSION_ID` and `LLM_USER_AGENT` are required by some providers (for
+example, OpenCode Go uses `x-opencode-session` for routing). They are harmless
+for generic OpenAI-compatible providers.
+
+## 3. Prepare documentation
+
+There are two supported workflows. The versioned `rag_pipeline` workflow is
+recommended; the flat `app.ingestion` workflow remains for migration and simple
+PDF-only deployments.
+
+### Recommended: versioned pipeline
+
+```bash
+# 1. Store an immutable version
+.venv/bin/python -m rag_pipeline.ingest \
+  "data/knowledge/БП Командировка.pdf" \
+  --document-id travel
+
+# 2. Render a preview (optional for PDF, required for Office)
+.venv/bin/python -m rag_pipeline.render \
+  "data/processed/documents/travel/sha256-<hash>" \
+  --dpi 150
+
+# 3. Extract retrieval chunks
+.venv/bin/python -m rag_pipeline.extract \
+  "data/processed/documents/travel/sha256-<hash>"
+```
+
+Batch mode:
+
+```bash
+.venv/bin/python -m rag_pipeline.render --all
+.venv/bin/python -m rag_pipeline.extract --all
+```
+
+The console scripts are also available after `pip install -e .`:
+
+```bash
+.venv/bin/rag-ingest ...
+.venv/bin/rag-render ...
+.venv/bin/rag-extract ...
+```
+
+### Legacy: flat PDF chunks
+
+```bash
+.venv/bin/python -m app.ingestion
+```
+
+Process one PDF or selected pages:
+
+```bash
+.venv/bin/python -m app.ingestion "data/knowledge/Реестр мебели.pdf"
+.venv/bin/python -m app.ingestion "data/knowledge/БП Командировка.pdf" --pages 4,7-9
+```
+
+This writes:
+
+```text
+data/processed/<pdf-stem>.chunks.jsonl
+data/processed/<pdf-stem>.chunks.md
+```
+
+The bot prefers active chunks from SQLite/PostgreSQL. If a document has no
+active database version, its chunks are loaded from the versioned or flat file
+index. This lets the bot use the new ingestion pipeline while existing
+documents are imported into the database.
+
+Complete parses are imported into the database. Page-limited debug parses only
+write the JSONL preview and do not replace the active database version.
+
+### Debug a single version
+
+```bash
+.venv/bin/python -m rag_pipeline.extract \
+  "data/processed/documents/travel/sha256-<hash>" \
+  --pages 4,7
+```
+
+Debug extracts have `status: partial` and are ignored by the bot.
+
+## 4. Start the bot
+
+```bash
+.venv/bin/python -m app
+```
+
+Startup checks:
+
+1. Telegram token is present.
+2. Chunks exist.
+3. Every PDF in `KNOWLEDGE_DIR` has active database chunks or file-based chunks.
+4. SQLite/PostgreSQL migrations are applied.
+5. The LLM client is created.
+
+The bot refuses to start if a document is missing from the chunk store.
+
+## 5. Optional document viewer
+
+Set both values in `.env`:
+
+```env
+DOCUMENTS_BASE_URL=http://127.0.0.1:8000
+DOCUMENT_LINK_SECRET=some-long-random-secret
+```
+
+Start the viewer:
+
+```bash
+.venv/bin/uvicorn app.anchors.viewer:app --host 127.0.0.1 --port 8000
+```
+
+The viewer serves signed source links for PDF and Office documents. The current
+viewer reads originals from `KNOWLEDGE_DIR`; linking directly to versioned render
+artifacts is a future improvement.
+
+## Pipeline overview
+
+```text
+data/knowledge/*
+        │
+        ├── app.ingestion ── JSONL + SQL chunks
+        │
+        └── versioned ── rag_pipeline.ingest
+                              │
+                              ├── rag_pipeline.render
+                              │     └── pages/frames/HTML previews
+                              │
+                              └── rag_pipeline.extract
+                                    └── versioned chunks
+        │
+        ▼
+app.rag.index (active SQL chunks + file fallback, BM25)
+        │
+        ▼
+app.bot.handlers + app.llm.client
+        │
+        ▼
+Telegram answer + citations + feedback
+        │
+        ▼
+SQLite/PostgreSQL
+```
+
+### What extraction does
+
+1. Docling extracts text, headings, lists, tables and picture regions.
+2. Running headers/footers and picture-OCR noise are removed.
+3. Pictures and unreadable pages are sent to the multimodal model with
+   `app/ingestion/prompts/image_analysis.j2`.
+4. Analysis items become normalized elements with source references.
+5. `app/ingestion/prompts/vision_chunker.j2` groups those references.
+6. The application resolves references back to text and structured data.
+7. The model never copies source text into the final chunk; it only groups
+   references, so malformed model output cannot silently rewrite facts.
+8. Missing structured elements are recovered deterministically.
+
+## Storage layout
+
+### Versioned store
+
+```text
+data/processed/documents/<document-id>/sha256-<hash>/
+  original.<ext>
+  manifest.json
+  renders/render-<hash>/
+    render_manifest.json
+    index.html
+    document.pdf            # Office only
+    pages/page_0001.png
+    frames/frame_0001.png
+  chunks/chunk-<hash>/
+    chunks.jsonl
+    chunks.md
+    chunk_manifest.json
+```
+
+- `manifest.json` describes the immutable upload.
+- `render_manifest.json` describes a cached visual rendition.
+- `chunk_manifest.json` describes a cached extraction.
+- Extraction and rendering are cached by configuration hash.
+- Debug extracts with `--pages` are marked `partial` and skipped by the bot.
+
+### Chunk schema
 
 ```json
 {
-  "id": "БП Командировка.pdf:p4:c0",
+  "id": "travel:sha256-...:p7:c2",
   "source": "БП Командировка.pdf",
-  "page": 4,
-  "chunk_index": 0,
-  "origin": "vision",
-  "type": "diagram",
-  "title": "2 Схема бизнес-процесса",
-  "content": "Step-by-step explanation of the process ...",
-  "data": {
-    "nodes": [
-      {"id": "start", "label": "Инициация БП", "kind": "start"},
-      {"id": "approve", "label": "Согласование с Директором БП", "kind": "action"}
-    ],
-    "edges": [
-      {"from": "start", "to": "approve", "label": ""}
-    ]
-  },
-  "text": "Text that is embedded into the vector index"
+  "document_id": "travel",
+  "version_id": "sha256-...",
+  "page": 7,
+  "page_to": 7,
+  "chunk_index": 2,
+  "origin": "docling",
+  "type": "text",
+  "title": "5 Инструкция",
+  "content": "...",
+  "data": null,
+  "text": "title + content + flattened data",
+  "locator": {"kind": "pdf-page", "value": 7}
 }
 ```
 
-- `origin` is `docling` for text/table chunks, `vision` for pictures and
-  `vision_page` for full-page fallback.
-- `content` is the human-readable transcription or explanation.
-- `data` keeps non-text structure machine-readable: graph nodes/edges for
-  diagrams, columns/rows for tables, fields/buttons/paths for forms and
-  screenshots.
-- `text` is `title + content + flattened data`, ready to send to an embedding
-  model. The bot should retrieve on this field and pass `content` + `data` to
-  the answer prompt.
+Types: `text`, `table`, `diagram`, `screenshot`, `form`, `image`, `mixed`.
 
-## Chunking logic
+Origins: `docling`, `vision`, `mixed`, `text`.
 
-Text uses Docling's `HybridChunker`, so chunk boundaries follow headings,
-paragraphs and lists rather than a fixed character window. On top of that:
+The bot searches `text` and passes `content`/`data` context to the LLM.
 
-- Tables are never split by the text chunker; each is one structured chunk.
-- Pictures are never split; each is one vision chunk (or several semantic
-  chunks, if the model returns them).
-- A section heading is repeated in the chunk so it can be understood when
-  retrieved alone. Docling sometimes misclassifies a numbered heading as a list
-  item, so the page's first section-like line is also propagated to continuation
-  pages as fallback context.
-- The original language is preserved (Russian stays Russian).
-- A line-based splitter catches only oversized text chunks as a safety net.
+## Supported source formats
 
-## Usage
+- PDF
+- DOCX, XLSX, PPTX
+- PNG, JPEG, WebP, TIFF, BMP
+- text, Markdown, HTML, RST, AsciiDoc, TeX
+- JSON, JSONL, XML, TOML, YAML, INI
+- CSV, TSV
+- source code and common project files
+
+Office files require LibreOffice for rendering. For Office extraction, the
+rendered PDF is used as the visual artifact; the original filename and version
+stay in chunk metadata.
+
+Install LibreOffice, for example:
 
 ```bash
-# Prepare every PDF in data/knowledge for the bot.
-.venv/bin/python scripts/ingest.py
+# macOS
+brew install --cask libreoffice
 
-# Prepare one file or force a rebuild after changing it.
-.venv/bin/python scripts/ingest.py "data/knowledge/БП Командировка.pdf" --force
-
-# Use a specific parser instead of auto-detecting Docling.
-.venv/bin/python scripts/ingest.py --parser light
+# Ubuntu/Debian
+sudo apt install libreoffice
 ```
 
-`scripts/ingest.py` writes `<name>.chunks.jsonl` and
-`<name>.chunks.meta.json` next to each PDF. The metadata stores the source and
-chunk checksums, so the bot ignores stale or partial output and falls back to
-OpenParse instead. The heavy parsing runs offline, not on every user question.
+Set `SOFFICE_PATH` if `soffice` is not on `PATH`.
 
-The vision step uses `VISION_BACKEND`:
-
-- `llama_cpp` (default on Linux) sends rendered images to the local
-  OpenAI-compatible llama.cpp server from `VISION_BASE_URL`.
-- `mlx` uses the MLX-VLM model on Apple Silicon.
+## Tests
 
 ```bash
-# Docling-first pipeline directly (recommended when Docling is installed)
-python docling_parser.py "/path/to/document.pdf"
-
-# specific pages (1-based), useful while testing
-python docling_parser.py "/path/to/document.pdf" --pages 4,7-10
+.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
 ```
 
-`vision_parser.py` can still be run on its own as a vision-only parser, and its
-model loading, rendering, prompt handling and writers are reused by
-`docling_parser.py` and `app/ingest/light.py`.
+Or:
 
 ```bash
-# vision-only mode, useful for comparing results
-python vision_parser.py "/path/to/document.pdf" --pages 4
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
-### Configuration
+## Troubleshooting
 
-| Variable | Purpose |
-| --- | --- |
-| `VISION_BACKEND` | `llama_cpp` (default on Linux) or `mlx` |
-| `VISION_BASE_URL` | OpenAI-compatible endpoint for the vision model |
-| `VISION_MODEL` | Model name sent to that endpoint |
-| `VISION_MAX_TOKENS` | Max tokens per vision response |
+### `TELEGRAM_BOT_TOKEN не задан`
 
-| Constant | File | Purpose |
-| --- | --- | --- |
-| `DEFAULT_PDF` | `docling_parser.py` | PDF used when no path is passed |
-| `MIN_PAGE_TEXT` | `docling_parser.py` | Below this many readable characters a page goes to vision fallback |
-| `PICTURE_IOU_DEDUP` | `docling_parser.py` | Overlap threshold for deduplicating picture items |
-| `MAX_TABLE_CELL_CHARS` | `docling_parser.py` | A longer cell means Docling likely mistook text for a table |
-| `MODEL_ID` | `vision_parser.py` | MLX-VLM model id |
-| `DPI` | `vision_parser.py` | Rasterisation resolution for page and region renders |
-| `MAX_TOKENS` | `vision_parser.py` | Max tokens per model response |
-| `IMAGE_AREA_RATIO` | `vision_parser.py` | Minimum page share for the vision-only parser |
-| `MAX_CHUNK_CHARS` | `vision_parser.py` | Safety split for oversized text chunks |
+Create `.env` from `.env.example` and put the token from @BotFather into
+`TELEGRAM_BOT_TOKEN`.
 
-The vision model is loaded lazily on the first vision call, so text-only PDFs
-never pay the model-loading cost.
+### `Чанки не найдены`
 
-## Legacy prototype
+Run one of:
 
-`openparse_test/openparse_test.py` is the earlier openparse approach (openparse
-nodes + two VLM passes). It is kept for reference only. `docling_parser.py` is
-the recommended entry point.
+```bash
+.venv/bin/python -m app.ingestion
+# or the full versioned pipeline:
+.venv/bin/python -m rag_pipeline.extract --all
+```
+
+### `Не обработаны PDF: ...`
+
+A PDF in `data/knowledge/` has no matching chunks. Run the legacy ingestion or
+migrate it through `rag_pipeline.ingest` → `render` → `extract`.
+
+### `Extraction is locked`
+
+A previous extraction was interrupted. Check that no extraction process is
+running, then remove:
+
+```text
+<version>/.extract.lock
+```
+
+The same applies to `.ingest.lock` and `.render.lock`.
+
+### Model returns no JSON or empty chunks
+
+- Confirm the model supports images.
+- Check `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY`.
+- Some providers require `LLM_SESSION_ID`; the client sends it as
+  `x-opencode-session`.
+- Re-run extraction; the cache key changes when the model or prompts change.
+- If the model still fails, extraction falls back to deterministic chunks for
+  the affected elements.
+
+### Office rendering fails
+
+Install LibreOffice and ensure `soffice` is on `PATH`, or set `SOFFICE_PATH` /
+pass `--soffice`. Rendering Office requires LibreOffice; extraction can then use
+the rendered PDF.
 
 ## Known limitations
 
-- Docling sometimes labels a numbered section heading as a list item or misses
-  it entirely. The page-context fallback recovers the common cases, but a title
-  can still be generic (`Страница 10`) on continuation pages.
+- Docling can misclassify a numbered heading as a list item; page-level heading
+  recovery handles common cases.
 - Docling only reports raster pictures. A diagram drawn entirely with vector
-  shapes may be treated as text and never reach the vision model.
-- The local 4-bit vision model occasionally misreads similar-looking characters
-  or Russian words in dense screenshots. Spot-check critical instructions.
-- A page is sent to full-page vision only when Docling finds almost no text and
-  no picture. A low-quality scan that Docling OCRs into plausible-looking text
-  will stay on the Docling path.
-- Embeddings and the retrieval/answer loop are downstream of this repository's
-  output; this layer only produces the chunks.
+  shapes may not reach the vision model.
+- Remote model output is nondeterministic. Structured elements that the model
+  omits are recovered by deterministic fallback, but text grouping can vary
+  between runs.
+- Office page numbers refer to LibreOffice-rendered pages, not logical DOCX
+  paragraphs or PPTX slides.
+- The viewer still serves `KNOWLEDGE_DIR` originals; versioned render links are
+  not wired yet.
+- BM25 retrieval is lexical. There is no vector index yet.
 
-:)
+## Repository notes
+
+- `.env` is ignored and must not be committed.
+- `data/processed/` is ignored; runtime chunks and manifests are local artifacts.
+- Internal PDFs in `data/knowledge/` should not be committed.
+- Do not edit files inside a stored version directory; create a new version
+  instead.

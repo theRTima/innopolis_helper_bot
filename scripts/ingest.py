@@ -17,7 +17,7 @@ from app.config import Settings
 from app.ingest.service import import_document
 from app.ingest.light import parse_document as parse_light
 from app.storage.db import Database
-from docling_parser import parse_document
+from app.ingestion.docling_parser import parse_document
 
 
 def is_current(pdf: Path) -> bool:

@@ -21,11 +21,15 @@ class Settings:
     llm_base_url: str
     llm_model: str
     llm_api_key: str
+    llm_session_id: str
+    llm_user_agent: str
     answer_max_tokens: int
     temperature: float
     top_k: int
     min_score: float
     knowledge_dir: Path
+    chunks_dir: Path
+    documents_dir: Path
     database_path: Path
     database_url: str
     documents_base_url: str
@@ -37,14 +41,28 @@ class Settings:
     def from_env(cls) -> "Settings":
         return cls(
             bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
-            llm_base_url=os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1"),
-            llm_model=os.getenv("LLM_MODEL", "gemma-4-e2b"),
+            llm_base_url=os.getenv(
+                "LLM_BASE_URL", "http://127.0.0.1:8080/v1"
+            ),
+            llm_model=os.getenv(
+                "LLM_MODEL", "gemma-4-e2b"
+            ),
             llm_api_key=os.getenv("LLM_API_KEY", "local"),
+            llm_session_id=os.getenv(
+                "LLM_SESSION_ID", "innopolis-helper-bot"
+            ).strip(),
+            llm_user_agent=os.getenv(
+                "LLM_USER_AGENT", "innopolis-helper-bot/1.0"
+            ).strip(),
             answer_max_tokens=int(os.getenv("ANSWER_MAX_TOKENS", "600")),
             temperature=float(os.getenv("TEMPERATURE", "0.1")),
             top_k=int(os.getenv("TOP_K", "2")),
             min_score=float(os.getenv("MIN_SCORE", "0")),
             knowledge_dir=_path("KNOWLEDGE_DIR", "data/knowledge"),
+            chunks_dir=_path("CHUNKS_DIR", "data/processed"),
+            documents_dir=_path(
+                "DOCUMENTS_DIR", "data/processed/documents"
+            ),
             database_path=_path("DATABASE_PATH", "storage/bot.db"),
             database_url=os.getenv("DATABASE_URL", "").strip(),
             documents_base_url=os.getenv("DOCUMENTS_BASE_URL", "").rstrip("/"),

@@ -1,9 +1,14 @@
-import pymupdf
+import json
 
-from app.ingest.light import parse_document as parse_light
-from app.rag.index import Chunk, SearchIndex, load_chunks, tokenize
-from scripts.ingest import is_current
-from vision_parser import write_outputs
+import pytest
+
+from app.rag.index import (
+    Chunk,
+    SearchIndex,
+    chunk_source_mismatches,
+    load_chunks,
+    tokenize,
+)
 
 
 def test_tokenize_keeps_russian_words_and_numbers() -> None:
@@ -40,94 +45,46 @@ def test_search_without_terms_returns_nothing() -> None:
     assert index.search("") == []
 
 
-def test_prepared_chunks_are_loaded_instead_of_reparsing_pdf(tmp_path) -> None:
-    pdf = tmp_path / "Документ.pdf"
-    pdf.write_bytes(b"not a valid PDF")
-    write_outputs(
-        [
+def test_load_chunks_reads_docling_jsonl(tmp_path) -> None:
+    chunks_path = tmp_path / "travel.chunks.jsonl"
+    chunks_path.write_text(
+        json.dumps(
             {
-                "id": "Документ.pdf:p3:c0",
-                "page": 3,
-                "type": "diagram",
-                "title": "Схема",
-                "content": "Согласование заявки",
-                "data": {"nodes": ["Директор"]},
-                "text": "Схема согласования заявки Директор",
-            }
-        ],
-        pdf,
-        tmp_path,
+                "id": "БП Командировка.pdf:p4:c0",
+                "source": "БП Командировка.pdf",
+                "page": 4,
+                "text": "Оформление командировки",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
-    chunks = load_chunks(tmp_path)
-
-    assert len(chunks) == 1
-    assert chunks[0].chunk_id == "Документ.pdf:p3:c0"
-    assert chunks[0].document == "Документ"
-    assert chunks[0].page_from == 3
-    assert chunks[0].kind == "diagram"
-    assert "Директор" in chunks[0].context
-    assert is_current(pdf)
-
-
-def test_light_ingestion_produces_searchable_chunks(tmp_path) -> None:
-    pdf = tmp_path / "sample.pdf"
-    with pymupdf.open() as document:
-        page = document.new_page()
-        page.insert_text((72, 72), "The employee handbook describes how to approve a request.")
-        document.save(pdf)
-
-    prepared = parse_light(pdf, tmp_path)
-    loaded = load_chunks(tmp_path)
-
-    assert prepared
-    assert loaded[0].chunk_id == prepared[0]["id"]
-    assert SearchIndex(loaded).search("approve request")
+    assert load_chunks(tmp_path) == [
+        Chunk(
+            chunk_id="БП Командировка.pdf:p4:c0",
+            document="БП Командировка",
+            page_from=4,
+            page_to=4,
+            text="Оформление командировки",
+        )
+    ]
 
 
-def test_ingest_output_becomes_stale_after_pdf_change(tmp_path) -> None:
-    pdf = tmp_path / "Документ.pdf"
-    pdf.write_bytes(b"original")
-    write_outputs(
-        [
-            {
-                "id": "Документ.pdf:p1:c0",
-                "page": 1,
-                "type": "text",
-                "title": "",
-                "content": "Исходный текст",
-                "data": None,
-                "text": "Исходный текст",
-            }
-        ],
-        pdf,
-        tmp_path,
-    )
-    assert is_current(pdf)
+def test_load_chunks_reports_malformed_json_with_location(tmp_path) -> None:
+    chunks_path = tmp_path / "bad.chunks.jsonl"
+    chunks_path.write_text("{bad json}\n", encoding="utf-8")
 
-    pdf.write_bytes(b"changed")
-
-    assert not is_current(pdf)
+    with pytest.raises(ValueError, match=r"bad\.chunks\.jsonl:1: invalid JSON"):
+        load_chunks(tmp_path)
 
 
-def test_partial_ingest_is_not_current(tmp_path) -> None:
-    pdf = tmp_path / "Документ.pdf"
-    pdf.write_bytes(b"original")
-    write_outputs(
-        [
-            {
-                "id": "Документ.pdf:p1:c0",
-                "page": 1,
-                "type": "text",
-                "title": "",
-                "content": "Исходный текст",
-                "data": None,
-                "text": "Исходный текст",
-            }
-        ],
-        pdf,
-        tmp_path,
-        complete=False,
-    )
+def test_chunk_source_mismatches_finds_missing_and_stale_sources(tmp_path) -> None:
+    (tmp_path / "current.pdf").touch()
+    chunks = [
+        Chunk("current:1", "current", 1, 1, "current"),
+        Chunk("removed:1", "removed", 1, 1, "removed"),
+    ]
 
-    assert not is_current(pdf)
+    assert chunk_source_mismatches(chunks, tmp_path) == ([], ["removed"])

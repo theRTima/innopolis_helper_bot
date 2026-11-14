@@ -14,6 +14,7 @@ __pycache__/
 .coverage
 htmlcov/
 .venv/
+*.egg-info/
 venv/
 
 # Local model weights and inference runtimes
@@ -55,7 +56,7 @@ logs/
 tmp/
 /storage/
 
-# Qdrant / PostgreSQL / Valkey local volumes
+# Local vector, database and cache volumes
 qdrant_storage/
 postgres_data/
 valkey_data/
