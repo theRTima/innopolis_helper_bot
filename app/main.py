@@ -31,7 +31,7 @@ async def run() -> int:
         print(error, file=sys.stderr)
         return 1
 
-    database = Database(settings.database_path)
+    database = Database(settings.database_url or settings.database_path)
     await database.init()
 
     logger.info("Загружаю документы из %s", settings.knowledge_dir)
