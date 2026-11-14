@@ -4,42 +4,52 @@ Telegram assistant for the organisation. This repository contains the document
 ingestion layer: it turns internal PDFs into retrieval-ready chunks that the bot
 can use to answer employee questions.
 
-## Why vision-as-parser
+## Docling first, vision only when needed
 
-The documents contain more than plain text: process diagrams, screenshots of
-internal systems, forms and output-file icons. A text-only parser (pdfminer,
-openparse, etc.) either skips those pages or returns only the heading, so the
-bot cannot answer questions about the actual process logic.
+The documents contain normal text and tables, but also process diagrams,
+screenshots of internal systems, forms and output-file icons. A pure text parser
+skips the non-text parts; a pure vision parser is slower and can misread dense
+text.
 
-`vision_parser.py` therefore uses the vision model as **both the parser and the
-chunker**. The model reads the page image, decides where semantic chunks begin
-and end, and writes down everything it sees. Diagrams are stored both as a
-readable explanation and as machine-readable graph data (`nodes` / `edges`), so
-the bot does not need a human-friendly rendering to reason about them.
+`docling_parser.py` therefore uses a hybrid pipeline:
+
+- **Docling** reads the document the normal way: text, lists, headings, reading
+  order and table structure.
+- **The vision model** is used only where Docling cannot produce usable content:
+  pictures/diagrams and pages with no readable text layer.
+
+The result is one JSONL file of self-contained chunks, with text, tables and
+diagrams all represented in a machine-usable form.
 
 ## Pipeline
 
-1. **Render the page.** Each selected page is rasterised at 200 DPI.
-2. **Separate raster images from text.** Large embedded images (diagrams,
-   screenshots) are extracted at their **native resolution**. The page render
-   has those areas whited out, so the page pass only sees text, tables, forms
-   and vector graphics. This avoids sending the same diagram twice and prevents
-   the model from describing a tiny, unreadable copy of it.
-3. **Vision chunking.** The page image goes to the VLM with
-   `prompts/vision_chunker.j2`. The model returns a JSON array of self-contained
-   chunks with `type`, `title`, `content` and optional structured `data`.
-4. **Diagram enrichment.** An embedded diagram first goes through
-   `prompts/image_analysis.j2` (labels, connections, business logic), then
-   through the chunker with that analysis as ground truth. This two-pass step is
-   what reliably recovers every box, decision and branch.
-5. **Clean-up.** Running headers/footers, export stamps and the artificial Word
-   heading error are removed. Heading-only chunks are merged into the chunk they
-   introduce. Oversized text chunks are split at line boundaries as a safety
-   net.
-6. **Write outputs.** Chunks are written to `<name>.chunks.jsonl` (for the bot /
+1. **Docling conversion.** `DocumentConverter` parses the selected page range.
+   It extracts text, headings, lists, tables and picture regions.
+2. **Noise filtering.** Running headers/footers (`FURNITURE`) are dropped, as are
+   the OCR text items Docling creates *inside* pictures — those are usually
+   garbage (`"BunoneO"`, `"Cornacoae"`) and are replaced by real vision analysis.
+3. **Text chunking.** Tables are removed from the chunker input and
+   `HybridChunker` splits the remaining text/list content. Each chunk gets the
+   nearest section heading, a page number and a stable id.
+4. **Table chunks.** Each table becomes one chunk with a clean markdown
+   rendering in `content` and machine-readable `columns` / `rows` in `data`.
+   This avoids the default table serialisation, which loses the row structure.
+5. **Picture chunks.** Every `PictureItem` is matched to its embedded image in
+   the source PDF and extracted at **native resolution** (falling back to a
+   region render if there is no embedded bitmap). It then goes through
+   `prompts/image_analysis.j2` and `prompts/vision_chunker.j2`. Diagrams are
+   stored as a readable explanation plus graph data (`nodes` / `edges`).
+6. **Page fallback.** A page with less than `MIN_PAGE_TEXT` readable characters,
+   no table and no picture is rendered and sent to the vision chunker as a
+   whole page.
+7. **Merge and clean.** Text, table and vision chunks are merged in page and
+   reading order. Headers/footers, export stamps and the artificial Word heading
+   error are removed; heading-only chunks are merged into the chunk they
+   introduce; oversized text chunks are split at line boundaries.
+8. **Write outputs.** Chunks are written to `<name>.chunks.jsonl` (for the bot /
    vector index) and `<name>.chunks.md` (for debugging by humans).
 
-All temporary page/image PNGs are deleted after the run, even on failure.
+All temporary PNGs are deleted after the run, even on failure.
 
 ## Chunk schema
 
@@ -49,7 +59,7 @@ All temporary page/image PNGs are deleted after the run, even on failure.
   "source": "БП Командировка.pdf",
   "page": 4,
   "chunk_index": 0,
-  "origin": "image",
+  "origin": "vision",
   "type": "diagram",
   "title": "2 Схема бизнес-процесса",
   "content": "Step-by-step explanation of the process ...",
@@ -66,6 +76,8 @@ All temporary page/image PNGs are deleted after the run, even on failure.
 }
 ```
 
+- `origin` is `docling` for text/table chunks, `vision` for pictures and
+  `vision_page` for full-page fallback.
 - `content` is the human-readable transcription or explanation.
 - `data` keeps non-text structure machine-readable: graph nodes/edges for
   diagrams, columns/rows for tables, fields/buttons/paths for forms and
@@ -76,60 +88,74 @@ All temporary page/image PNGs are deleted after the run, even on failure.
 
 ## Chunking logic
 
-There is no fixed token window and no embedding-based semantic segmentation.
-**The vision model is the chunker.**
+Text uses Docling's `HybridChunker`, so chunk boundaries follow headings,
+paragraphs and lists rather than a fixed character window. On top of that:
 
-- Chunks are cut at semantic boundaries: heading/section, paragraph, table,
-  diagram, form or screenshot.
-- Tables, diagrams, forms and lists are never split across chunks.
-- A heading is merged into the chunk it introduces, never stored alone.
-- Target size is roughly 64-1024 tokens. Dense pages should produce several
-  chunks; a line-based splitter only catches overflow.
-- Each embedded image becomes its own chunk, processed at native resolution.
-- Every chunk repeats enough context (section title, object names) to be
-  understood in isolation, because retrieval may return it alone.
+- Tables are never split by the text chunker; each is one structured chunk.
+- Pictures are never split; each is one vision chunk (or several semantic
+  chunks, if the model returns them).
+- A section heading is repeated in the chunk so it can be understood when
+  retrieved alone. Docling sometimes misclassifies a numbered heading as a list
+  item, so the page's first section-like line is also propagated to continuation
+  pages as fallback context.
 - The original language is preserved (Russian stays Russian).
+- A line-based splitter catches only oversized text chunks as a safety net.
 
 ## Usage
 
 ```bash
-# all pages
-python vision_parser.py "/path/to/document.pdf"
+# Docling-first pipeline (recommended)
+python docling_parser.py "/path/to/document.pdf"
 
 # specific pages (1-based), useful while testing
-python vision_parser.py "/path/to/document.pdf" --pages 4,7-9
+python docling_parser.py "/path/to/document.pdf" --pages 4,7-10
 
 # choose output directory
-python vision_parser.py "/path/to/document.pdf" --out-dir output
+python docling_parser.py "/path/to/document.pdf" --out-dir output
 ```
 
-Default PDF and model are set at the top of `vision_parser.py`. The model is
-loaded lazily on the first vision call.
+`vision_parser.py` can still be run on its own as a vision-only parser, and its
+model loading, rendering, prompt handling and writers are reused by
+`docling_parser.py`.
+
+```bash
+# vision-only mode, useful for comparing results
+python vision_parser.py "/path/to/document.pdf" --pages 4
+```
 
 ### Configuration
 
-| Constant | Purpose |
-| --- | --- |
-| `DEFAULT_PDF` | PDF used when no path is passed |
-| `MODEL_ID` | MLX-VLM model id |
-| `DPI` | Page rasterisation resolution |
-| `MAX_TOKENS` | Max tokens per model response |
-| `IMAGE_AREA_RATIO` | Minimum page share for an embedded image to be treated as content |
-| `MAX_CHUNK_CHARS` | Safety split for oversized text chunks |
+| Constant | File | Purpose |
+| --- | --- | --- |
+| `DEFAULT_PDF` | `docling_parser.py` | PDF used when no path is passed |
+| `MIN_PAGE_TEXT` | `docling_parser.py` | Below this many readable characters a page goes to vision fallback |
+| `PICTURE_IOU_DEDUP` | `docling_parser.py` | Overlap threshold for deduplicating picture items |
+| `MODEL_ID` | `vision_parser.py` | MLX-VLM model id |
+| `DPI` | `vision_parser.py` | Rasterisation resolution for page and region renders |
+| `MAX_TOKENS` | `vision_parser.py` | Max tokens per model response |
+| `IMAGE_AREA_RATIO` | `vision_parser.py` | Minimum page share for the vision-only parser |
+| `MAX_CHUNK_CHARS` | `vision_parser.py` | Safety split for oversized text chunks |
+
+The vision model is loaded lazily on the first vision call, so text-only PDFs
+never pay the model-loading cost.
 
 ## Legacy prototype
 
-`openparse_test/openparse_test.py` is the earlier text-segmentation approach
-(openparse nodes + two VLM passes). It is kept for reference. It cannot chunk
-by vision and relies on fallbacks for image-only pages, so `vision_parser.py`
-is the recommended entry point.
+`openparse_test/openparse_test.py` is the earlier openparse approach (openparse
+nodes + two VLM passes). It is kept for reference only. `docling_parser.py` is
+the recommended entry point.
 
 ## Known limitations
 
-- The local 4-bit model occasionally misreads similar-looking characters or
-  Russian words in dense screenshots. Spot-check critical instructions.
-- The chunker may return one large chunk for a dense page; the overflow splitter
-  keeps it usable, but a stronger model or a second chunking pass would improve
-  boundaries.
+- Docling sometimes labels a numbered section heading as a list item or misses
+  it entirely. The page-context fallback recovers the common cases, but a title
+  can still be generic (`Страница 10`) on continuation pages.
+- Docling only reports raster pictures. A diagram drawn entirely with vector
+  shapes may be treated as text and never reach the vision model.
+- The local 4-bit vision model occasionally misreads similar-looking characters
+  or Russian words in dense screenshots. Spot-check critical instructions.
+- A page is sent to full-page vision only when Docling finds almost no text and
+  no picture. A low-quality scan that Docling OCRs into plausible-looking text
+  will stay on the Docling path.
 - Embeddings and the retrieval/answer loop are downstream of this repository's
   output; this layer only produces the chunks.

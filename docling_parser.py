@@ -38,6 +38,10 @@ MIN_PAGE_TEXT = 30
 # embedded image and must not be parsed twice.
 PICTURE_IOU_DEDUP = 0.8
 
+# Docling sometimes classifies a numbered section heading as a list item
+# ("5 Инструкция"). This pattern lets us recover it as page context.
+HEADING_RE = re.compile(r"^\d+(?:\.\d+)*\s+[А-ЯЁA-Z]")
+
 
 def iter_prov_page(item):
     """Page number of a Docling item, or ``None``."""
@@ -84,6 +88,37 @@ def heading_map(doc):
     return result
 
 
+def page_heading_context(doc, skip_refs):
+    """Section context for each page, propagated across continuation pages.
+
+    Docling does not always mark a section title as a heading. We look at the
+    first readable item of every page and keep the last section-like line as
+    the context for the following pages.
+    """
+    first_item = {}
+    for item, _level in doc.iterate_items():
+        page = iter_prov_page(item)
+        if page is None or page in first_item:
+            continue
+        if item.self_ref in skip_refs or is_furniture(item):
+            continue
+        first_item[page] = item
+
+    result = {}
+    current = ""
+    for page in sorted(first_item):
+        item = first_item[page]
+        text = (getattr(item, "text", "") or "").strip()
+        is_heading = (
+            str(getattr(item, "label", "")) == "section_header"
+            or (HEADING_RE.match(text) and len(text) <= 80)
+        )
+        if is_heading:
+            current = text
+        result[page] = current
+    return result
+
+
 def page_body_chars(doc, skip_refs):
     """Readable body text per page, ignoring furniture and picture OCR."""
     counts = {}
@@ -107,11 +142,11 @@ def first_page(items):
     return None
 
 
-def chunk_headings(chunk, chunks_headings, item_ref):
+def chunk_headings(chunk, chunks_headings, item_ref, page, page_context):
     """Heading path for a Docling chunk."""
     if chunk.meta.headings:
         return " > ".join(chunk.meta.headings)
-    return chunks_headings.get(item_ref, "")
+    return chunks_headings.get(item_ref) or page_context.get(page, "")
 
 
 def make_chunk(pdf_name, page, title, content, chunk_type, data, origin, order):
@@ -130,11 +165,11 @@ def make_chunk(pdf_name, page, title, content, chunk_type, data, origin, order):
     }
 
 
-def table_chunk(pdf_name, doc, table, headings, order):
+def table_chunk(pdf_name, doc, table, headings, page_context, order):
     """One structured chunk per table, with a clean markdown rendering."""
     page = iter_prov_page(table) or 1
-    context = headings.get(table.self_ref, "")
-    title = context.split(" > ")[-1] if context else ""
+    context = headings.get(table.self_ref) or page_context.get(page, "")
+    title = context.split(" > ")[-1] if context else "Таблица"
 
     markdown = table.export_to_markdown(doc).strip()
     content = f"{context}\n\n{markdown}" if context else markdown
@@ -152,7 +187,7 @@ def table_chunk(pdf_name, doc, table, headings, order):
     )
 
 
-def text_chunks(pdf_name, doc, selected_pages, orders, headings):
+def text_chunks(pdf_name, doc, selected_pages, orders, headings, page_context):
     """Text/list chunks from Docling's hybrid chunker, without tables."""
     document = doc.model_copy(deep=True)
     document.delete_items(node_items=document.tables)
@@ -177,7 +212,9 @@ def text_chunks(pdf_name, doc, selected_pages, orders, headings):
         if not content:
             continue
 
-        context = chunk_headings(chunk, headings, items[0].self_ref)
+        context = chunk_headings(
+            chunk, headings, items[0].self_ref, page, page_context
+        )
         title = context.split(" > ")[-1] if context else ""
         if context and context not in content:
             content = f"{context}\n\n{content}"
@@ -230,6 +267,7 @@ def picture_chunks(
     selected_pages,
     orders,
     headings,
+    page_context,
     out_dir,
     created_images,
 ):
@@ -275,7 +313,7 @@ def picture_chunks(
             start_index=0,
         )
 
-        context = headings.get(picture.self_ref, "")
+        context = headings.get(picture.self_ref) or page_context.get(page_no, "")
         order = orders.get(picture.self_ref, 10**9)
         for chunk in vision_chunks:
             title = chunk["title"]
@@ -336,6 +374,14 @@ def finalize_page(chunks, pdf_name, page_no):
         seen.add(key)
         unique.append(chunk)
 
+    for chunk in unique:
+        if chunk["title"]:
+            continue
+        if chunk["type"] == "text":
+            chunk["title"] = f"Страница {page_no}"
+        elif chunk["type"] == "table":
+            chunk["title"] = "Таблица"
+
     finalized = vp.postprocess_page_chunks(unique, pdf_name, page_no)
     for chunk in finalized:
         chunk.pop("_order", None)
@@ -363,6 +409,7 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
     orders = item_order_map(doc)
     headings = heading_map(doc)
     skip_refs = picture_child_refs(doc)
+    page_context = page_heading_context(doc, skip_refs)
     body_chars = page_body_chars(doc, skip_refs)
     pictures_by_page = {}
     for picture in doc.pictures:
@@ -375,9 +422,18 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
         if page is not None:
             tables_by_page[page] = tables_by_page.get(page, 0) + 1
 
-    chunks = text_chunks(pdf_path.name, doc, selected, orders, headings)
+    chunks = text_chunks(
+        pdf_path.name, doc, selected, orders, headings, page_context
+    )
     chunks.extend(
-        table_chunk(pdf_path.name, doc, table, headings, orders.get(table.self_ref, 0))
+        table_chunk(
+            pdf_path.name,
+            doc,
+            table,
+            headings,
+            page_context,
+            orders.get(table.self_ref, 0),
+        )
         for table in doc.tables
         if iter_prov_page(table) in selected
     )
@@ -392,6 +448,7 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
                 selected,
                 orders,
                 headings,
+                page_context,
                 out_dir,
                 created_images,
             )
