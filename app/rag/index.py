@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import snowballstemmer
+from sqlalchemy import select
+
+from app.storage.db import Database
+from app.storage.models import Chunk as StoredChunk
+from app.storage.models import Document, DocumentVersion
 
 TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
 logger = logging.getLogger(__name__)
@@ -114,6 +119,51 @@ def load_chunks(knowledge_dir: Path) -> list[Chunk]:
                     text=text,
                 )
             )
+    return chunks
+
+
+async def load_chunks_from_database(database: Database) -> list[Chunk]:
+    """Load chunks belonging to each document's active version."""
+    statement = (
+        select(Document, DocumentVersion, StoredChunk)
+        .join(DocumentVersion, DocumentVersion.document_id == Document.id)
+        .join(StoredChunk, StoredChunk.document_version_id == DocumentVersion.id)
+        .where(DocumentVersion.version == Document.active_version)
+        .order_by(Document.slug, StoredChunk.ordinal)
+    )
+
+    async with database.session() as session:
+        rows = (await session.execute(statement)).all()
+
+    chunks: list[Chunk] = []
+    for document, version, stored_chunk in rows:
+        if stored_chunk.locator_kind != "pdf_page":
+            logger.warning(
+                "Пропускаю чанк %s: неподдерживаемый локатор %s",
+                stored_chunk.id,
+                stored_chunk.locator_kind,
+            )
+            continue
+        try:
+            page = int(stored_chunk.locator_value)
+        except (TypeError, ValueError):
+            logger.warning("Пропускаю чанк %s: некорректная страница", stored_chunk.id)
+            continue
+
+        chunks.append(
+            Chunk(
+                chunk_id=stored_chunk.external_id or f"{document.slug}-v{version.version}-{stored_chunk.ordinal}",
+                document=document.slug,
+                page_from=page,
+                page_to=page,
+                text=stored_chunk.text,
+                title=stored_chunk.title or "",
+                content=stored_chunk.content,
+                data=stored_chunk.data,
+                origin=stored_chunk.origin or "database",
+                kind=stored_chunk.chunk_type or "text",
+            )
+        )
     return chunks
 
 

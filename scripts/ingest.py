@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -14,7 +14,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.config import Settings
+from app.ingest.service import import_document
 from app.ingest.light import parse_document as parse_light
+from app.storage.db import Database
 from docling_parser import parse_document
 
 
@@ -34,29 +36,56 @@ def is_current(pdf: Path) -> bool:
         return False
 
 
+def load_cached_chunks(pdf: Path) -> list[dict]:
+    chunks_path = pdf.with_name(f"{pdf.stem}.chunks.jsonl")
+    return [
+        json.loads(line)
+        for line in chunks_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+async def import_pdfs(settings: Settings, documents: list[Path], args: argparse.Namespace) -> None:
+    database = Database(settings.database_url or settings.database_path)
+    await database.init()
+    try:
+        for pdf in documents:
+            pdf = pdf.resolve()
+            if not pdf.is_file():
+                raise FileNotFoundError(pdf)
+
+            if not args.force and is_current(pdf):
+                chunks = load_cached_chunks(pdf)
+                print(f"Использую готовый результат парсинга: {pdf.name}")
+            else:
+                parser = parse_light if args.parser == "light" else parse_document
+                chunks = parser(pdf, out_dir=pdf.parent)
+
+            async with database.session() as session:
+                async with session.begin():
+                    version, imported = await import_document(session, pdf, chunks)
+
+            result = "импортирована" if imported else "без изменений"
+            print(
+                f"{pdf.name}: {result}; версия {version.version}, "
+                f"чанков {len(chunks)}"
+            )
+    finally:
+        await database.close()
+
+
 def main() -> None:
     settings = Settings.from_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pdf", nargs="?", type=Path, help="PDF; по умолчанию все из KNOWLEDGE_DIR")
     parser.add_argument("--parser", choices=("auto", "docling", "light"), default="auto")
-    parser.add_argument("--force", action="store_true", help="обработать заново даже при готовом индексе")
+    parser.add_argument("--force", action="store_true", help="повторно обработать документы")
     args = parser.parse_args()
 
     documents = [args.pdf] if args.pdf else sorted(settings.knowledge_dir.glob("*.pdf"))
     if not documents:
         parser.error(f"Нет PDF в {settings.knowledge_dir}")
-    for pdf in documents:
-        pdf = pdf.resolve()
-        if not pdf.is_file():
-            parser.error(f"Файл не найден: {pdf}")
-        if not args.force and is_current(pdf):
-            print(f"Уже обработан: {pdf.name}")
-            continue
-
-        backend = args.parser
-        chunks = parse_document(pdf, out_dir=pdf.parent)
-
-        print(f"Готово: {len(chunks)} чанков для {pdf.name}")
+    asyncio.run(import_pdfs(settings, documents, args))
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -78,6 +78,8 @@ class Document(Base):
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     format: Mapped[str] = mapped_column(String(16), nullable=False)
+    # The bot retrieves chunks only from this version. Older versions remain available.
+    active_version: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
 
 
@@ -100,7 +102,15 @@ class Chunk(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     document_version_id: Mapped[int] = mapped_column(ForeignKey("document_versions.id"), nullable=False, index=True)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Parser-provided identifier, e.g. "document.pdf:p6:c0"; DB id remains the PK.
+    external_id: Mapped[str | None] = mapped_column(String(500))
+    title: Mapped[str | None] = mapped_column(String(500))
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str | None] = mapped_column(Text)
+    # Structured parser output, such as table cells or normalized vision fields.
+    data: Mapped[dict | list | None] = mapped_column(JSON)
+    chunk_type: Mapped[str | None] = mapped_column(String(64))
+    origin: Mapped[str | None] = mapped_column(String(64))
     locator_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     locator_value: Mapped[str] = mapped_column(String(255), nullable=False)
 

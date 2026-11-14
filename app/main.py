@@ -13,7 +13,7 @@ from aiogram.exceptions import TelegramUnauthorizedError
 from app.bot.handlers import router
 from app.config import Settings
 from app.llm.client import LLMClient
-from app.rag.index import SearchIndex, load_chunks
+from app.rag.index import SearchIndex, load_chunks_from_database
 from app.storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -34,12 +34,12 @@ async def run() -> int:
     database = Database(settings.database_url or settings.database_path)
     await database.init()
 
-    logger.info("Загружаю документы из %s", settings.knowledge_dir)
-    chunks = load_chunks(settings.knowledge_dir)
+    logger.info("Загружаю активные версии документов из БД")
+    chunks = await load_chunks_from_database(database)
     if chunks:
         logger.info("Загружено %d фрагментов", len(chunks))
     else:
-        logger.warning("В %s не найдено PDF", settings.knowledge_dir)
+        logger.warning("В БД не найдено активных чанков документов")
     index = SearchIndex(chunks)
 
     llm = LLMClient(
