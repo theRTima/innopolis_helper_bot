@@ -29,6 +29,9 @@ markdown_prompt = env.get_template("markdown_prompt.j2")
 
 parser = openparse.DocumentParser()
 
+# PNGs generated during the run; removed when parsing finishes or fails.
+created_pngs = []
+
 
 def run_vision(prompt, images):
     formatted_prompt = apply_chat_template(
@@ -70,16 +73,19 @@ def render_node(doc, node, node_index):
         ) & page.rect
         image_path = OUTPUT_DIR / f"node_{node_index:02d}_page_{bbox.page + 1}.png"
         page.get_pixmap(dpi=DPI, clip=clip).save(image_path)
+        created_pngs.append(image_path)
         images.append(image_path)
     return images
 
 
-def main():
+def parse_pdf():
     doc = pymupdf.open(PDF_PATH)
 
     for page_index in range(doc.page_count):
         page = doc.load_page(page_index)
-        page.get_pixmap(dpi=DPI).save(OUTPUT_DIR / f"page_{page_index + 1}.png")
+        image_path = OUTPUT_DIR / f"page_{page_index + 1}.png"
+        page.get_pixmap(dpi=DPI).save(image_path)
+        created_pngs.append(image_path)
 
     doc.close()
 
@@ -112,10 +118,21 @@ def main():
             f"<!-- node {node_index} (page {node_pages}) -->\n\n{markdown.strip()}"
         )
 
+    render_doc.close()
+
     md_path = OUTPUT_DIR / f"{PDF_PATH.stem}.md"
     md_path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
 
     print(f"Saved parsed output to {md_path}")
+
+
+def main():
+    try:
+        parse_pdf()
+    finally:
+        for image_path in created_pngs:
+            image_path.unlink(missing_ok=True)
+        created_pngs.clear()
 
 
 if __name__ == "__main__":
