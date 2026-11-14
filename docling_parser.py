@@ -42,6 +42,13 @@ PICTURE_IOU_DEDUP = 0.8
 # ("5 Инструкция"). This pattern lets us recover it as page context.
 HEADING_RE = re.compile(r"^\d+(?:\.\d+)*\s+[А-ЯЁA-Z]")
 
+# Lines in a table of contents are split into many tiny chunks by Docling.
+TOC_RE = re.compile(r"\.{4,}")
+
+# A cell longer than this usually means Docling mistook a paragraph or a
+# two-column layout for a table.
+MAX_TABLE_CELL_CHARS = 300
+
 
 def iter_prov_page(item):
     """Page number of a Docling item, or ``None``."""
@@ -89,7 +96,7 @@ def heading_map(doc):
 
 
 def page_heading_context(doc, skip_refs):
-    """Section context for each page, propagated across continuation pages.
+    """Section context and origin page for each page.
 
     Docling does not always mark a section title as a heading. We look at the
     first readable item of every page and keep the last section-like line as
@@ -106,6 +113,7 @@ def page_heading_context(doc, skip_refs):
 
     result = {}
     current = ""
+    current_page = 0
     for page in sorted(first_item):
         item = first_item[page]
         text = (getattr(item, "text", "") or "").strip()
@@ -115,8 +123,47 @@ def page_heading_context(doc, skip_refs):
         )
         if is_heading:
             current = text
-        result[page] = current
+            current_page = page
+        result[page] = (current, current_page)
     return result
+
+
+def heading_pages(doc):
+    """Pages where each section-header text appears."""
+    pages = {}
+    for item, _level in doc.iterate_items():
+        if str(getattr(item, "label", "")) != "section_header":
+            continue
+        text = (item.text or "").strip()
+        page = iter_prov_page(item)
+        if text and page is not None:
+            pages.setdefault(text, []).append(page)
+    return pages
+
+
+def resolve_heading(doc_context, page, page_context, headings_by_page):
+    """Combine Docling's heading path with the page-level section context."""
+    page_text, page_origin = page_context.get(page, ("", 0))
+    if not doc_context:
+        return page_text
+    if not page_text:
+        return doc_context
+
+    last = doc_context.split(" > ")[-1]
+    origins = [
+        origin
+        for origin in headings_by_page.get(last, [])
+        if origin <= page
+    ]
+    doc_origin = max(origins) if origins else 0
+    if doc_origin < page_origin:
+        # Docling is still carrying a heading from an earlier section.
+        return page_text
+    if doc_context == page_text or doc_context.startswith(page_text + " >"):
+        return doc_context
+    if page_text not in doc_context:
+        return f"{page_text} > {doc_context}"
+    return doc_context
 
 
 def page_body_chars(doc, skip_refs):
@@ -142,11 +189,15 @@ def first_page(items):
     return None
 
 
-def chunk_headings(chunk, chunks_headings, item_ref, page, page_context):
+def chunk_headings(
+    chunk, chunks_headings, item_ref, page, page_context, headings_by_page
+):
     """Heading path for a Docling chunk."""
     if chunk.meta.headings:
-        return " > ".join(chunk.meta.headings)
-    return chunks_headings.get(item_ref) or page_context.get(page, "")
+        doc_context = " > ".join(chunk.meta.headings)
+    else:
+        doc_context = chunks_headings.get(item_ref, "")
+    return resolve_heading(doc_context, page, page_context, headings_by_page)
 
 
 def make_chunk(pdf_name, page, title, content, chunk_type, data, origin, order):
@@ -165,16 +216,49 @@ def make_chunk(pdf_name, page, title, content, chunk_type, data, origin, order):
     }
 
 
-def table_chunk(pdf_name, doc, table, headings, page_context, order):
+def structured_table(table):
+    """Whether Docling found a real row/column table, not a text layout."""
+    grid = table.data.grid
+    if len(grid) < 2 or len(grid[0]) < 2:
+        return False
+    longest = max(
+        (len(cell.text.strip()) for row in grid for cell in row), default=0
+    )
+    return longest <= MAX_TABLE_CELL_CHARS
+
+
+def table_chunk(
+    pdf_name, doc, table, headings, page_context, headings_by_page, order
+):
     """One structured chunk per table, with a clean markdown rendering."""
     page = iter_prov_page(table) or 1
-    context = headings.get(table.self_ref) or page_context.get(page, "")
-    title = context.split(" > ")[-1] if context else "Таблица"
+    context = resolve_heading(
+        headings.get(table.self_ref, ""), page, page_context, headings_by_page
+    )
+    title = context.split(" > ")[-1] if context else ""
 
+    grid = table.data.grid
+    if not structured_table(table):
+        # Docling sometimes detects a paragraph or a two-column layout as a
+        # table. Keep the content as ordinary text instead of fake columns.
+        cells = [
+            cell.text.strip()
+            for row in grid
+            for cell in row
+            if cell.text.strip()
+        ]
+        content = "\n".join(cells)
+        if context:
+            content = f"{context}\n\n{content}"
+        return make_chunk(
+            pdf_name, page, title, content, "text", None, "docling", order
+        )
+
+    if not title:
+        title = "Таблица"
     markdown = table.export_to_markdown(doc).strip()
     content = f"{context}\n\n{markdown}" if context else markdown
 
-    grid = table.data.grid
     columns = [cell.text.strip() for cell in grid[0]] if grid else []
     rows = (
         [[cell.text.strip() for cell in row] for row in grid[1:]]
@@ -187,7 +271,9 @@ def table_chunk(pdf_name, doc, table, headings, page_context, order):
     )
 
 
-def text_chunks(pdf_name, doc, selected_pages, orders, headings, page_context):
+def text_chunks(
+    pdf_name, doc, selected_pages, orders, headings, page_context, headings_by_page
+):
     """Text/list chunks from Docling's hybrid chunker, without tables."""
     document = doc.model_copy(deep=True)
     document.delete_items(node_items=document.tables)
@@ -213,7 +299,12 @@ def text_chunks(pdf_name, doc, selected_pages, orders, headings, page_context):
             continue
 
         context = chunk_headings(
-            chunk, headings, items[0].self_ref, page, page_context
+            chunk,
+            headings,
+            items[0].self_ref,
+            page,
+            page_context,
+            headings_by_page,
         )
         title = context.split(" > ")[-1] if context else ""
         if context and context not in content:
@@ -226,6 +317,35 @@ def text_chunks(pdf_name, doc, selected_pages, orders, headings, page_context):
             )
         )
     return chunks
+
+
+def merge_toc_chunks(chunks):
+    """Merge consecutive table-of-contents lines into one chunk."""
+    merged = []
+    for chunk in chunks:
+        previous = merged[-1] if merged else None
+        if (
+            previous is not None
+            and chunk["type"] == "text"
+            and previous["type"] == "text"
+            and previous["page"] == chunk["page"]
+            and previous["title"] == chunk["title"]
+            and TOC_RE.search(previous["content"])
+            and TOC_RE.search(chunk["content"])
+        ):
+            addition = chunk["content"]
+            prefix = f"{chunk['title']}\n\n"
+            if addition.startswith(prefix):
+                addition = addition[len(prefix) :]
+            previous["content"] = (
+                f"{previous['content'].rstrip()}\n{addition.strip()}"
+            )
+            previous["text"] = vp.build_search_text(
+                previous["title"], previous["content"], previous["data"]
+            )
+            continue
+        merged.append(chunk)
+    return merged
 
 
 def bbox_to_rect(pdf_page, bbox):
@@ -268,6 +388,7 @@ def picture_chunks(
     orders,
     headings,
     page_context,
+    headings_by_page,
     out_dir,
     created_images,
 ):
@@ -282,6 +403,8 @@ def picture_chunks(
 
         pdf_page = pdf_doc.load_page(page_no - 1)
         target = bbox_to_rect(pdf_page, picture.prov[0].bbox)
+        if target.is_empty or target.get_area() <= 0:
+            continue
 
         # One embedded image can produce several Docling picture items.
         previous = seen_rects.get(page_no)
@@ -296,11 +419,15 @@ def picture_chunks(
         seen_rects[page_no] = target
 
         match = matching_embedded_image(pdf_page, target)
+        image_path = None
         if match is not None:
-            image_path = vp.render_embedded_image(
-                pdf_doc, match[1], page_no - 1, picture_index, out_dir
-            )
-        else:
+            try:
+                image_path = vp.render_embedded_image(
+                    pdf_doc, match[1], page_no - 1, picture_index, out_dir
+                )
+            except Exception:
+                image_path = None
+        if image_path is None:
             image_path = render_region(pdf_page, target, out_dir, picture_index)
         created_images.append(image_path)
 
@@ -313,7 +440,12 @@ def picture_chunks(
             start_index=0,
         )
 
-        context = headings.get(picture.self_ref) or page_context.get(page_no, "")
+        context = resolve_heading(
+            headings.get(picture.self_ref, ""),
+            page_no,
+            page_context,
+            headings_by_page,
+        )
         order = orders.get(picture.self_ref, 10**9)
         for chunk in vision_chunks:
             title = chunk["title"]
@@ -408,6 +540,7 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
 
     orders = item_order_map(doc)
     headings = heading_map(doc)
+    headings_by_page = heading_pages(doc)
     skip_refs = picture_child_refs(doc)
     page_context = page_heading_context(doc, skip_refs)
     body_chars = page_body_chars(doc, skip_refs)
@@ -422,8 +555,16 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
         if page is not None:
             tables_by_page[page] = tables_by_page.get(page, 0) + 1
 
-    chunks = text_chunks(
-        pdf_path.name, doc, selected, orders, headings, page_context
+    chunks = merge_toc_chunks(
+        text_chunks(
+            pdf_path.name,
+            doc,
+            selected,
+            orders,
+            headings,
+            page_context,
+            headings_by_page,
+        )
     )
     chunks.extend(
         table_chunk(
@@ -432,6 +573,7 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
             table,
             headings,
             page_context,
+            headings_by_page,
             orders.get(table.self_ref, 0),
         )
         for table in doc.tables
@@ -449,6 +591,7 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
                 orders,
                 headings,
                 page_context,
+                headings_by_page,
                 out_dir,
                 created_images,
             )

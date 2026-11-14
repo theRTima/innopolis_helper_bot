@@ -31,9 +31,11 @@ diagrams all represented in a machine-usable form.
 3. **Text chunking.** Tables are removed from the chunker input and
    `HybridChunker` splits the remaining text/list content. Each chunk gets the
    nearest section heading, a page number and a stable id.
-4. **Table chunks.** Each table becomes one chunk with a clean markdown
+4. **Table chunks.** Each real table becomes one chunk with a clean markdown
    rendering in `content` and machine-readable `columns` / `rows` in `data`.
    This avoids the default table serialisation, which loses the row structure.
+   A paragraph or a two-column layout that Docling misdetects as a table is
+   emitted as ordinary text instead of fake columns.
 5. **Picture chunks.** Every `PictureItem` is matched to its embedded image in
    the source PDF and extracted at **native resolution** (falling back to a
    region render if there is no embedded bitmap). It then goes through
@@ -130,6 +132,7 @@ python vision_parser.py "/path/to/document.pdf" --pages 4
 | `DEFAULT_PDF` | `docling_parser.py` | PDF used when no path is passed |
 | `MIN_PAGE_TEXT` | `docling_parser.py` | Below this many readable characters a page goes to vision fallback |
 | `PICTURE_IOU_DEDUP` | `docling_parser.py` | Overlap threshold for deduplicating picture items |
+| `MAX_TABLE_CELL_CHARS` | `docling_parser.py` | A longer cell means Docling likely mistook text for a table |
 | `MODEL_ID` | `vision_parser.py` | MLX-VLM model id |
 | `DPI` | `vision_parser.py` | Rasterisation resolution for page and region renders |
 | `MAX_TOKENS` | `vision_parser.py` | Max tokens per model response |
