@@ -13,7 +13,7 @@ from aiogram.exceptions import TelegramUnauthorizedError
 from app.bot.handlers import router
 from app.config import Settings
 from app.llm.client import LLMClient
-from app.rag.index import SearchIndex, load_chunks
+from app.rag.index import SearchIndex, chunk_source_mismatches, load_chunks
 from app.storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -31,16 +31,33 @@ async def run() -> int:
         print(error, file=sys.stderr)
         return 1
 
+    logger.info("Загружаю фрагменты из %s", settings.chunks_dir)
+    chunks = load_chunks(settings.chunks_dir)
+    missing, stale = chunk_source_mismatches(chunks, settings.knowledge_dir)
+    if not chunks or missing or stale:
+        details = []
+        recovery = []
+        if not chunks:
+            details.append("чанки не найдены")
+        if missing:
+            details.append(f"не обработаны PDF: {', '.join(missing)}")
+            recovery.append("сначала выполните: python -m app.ingestion")
+        if stale:
+            details.append(f"нет исходных PDF для чанков: {', '.join(stale)}")
+            recovery.append(
+                f"удалите устаревшие *.chunks.jsonl из {settings.chunks_dir}"
+            )
+        logger.error(
+            "%s. %s",
+            "; ".join(details),
+            "; ".join(recovery),
+        )
+        return 1
+    logger.info("Загружено %d фрагментов", len(chunks))
+    index = SearchIndex(chunks)
+
     database = Database(settings.database_url or settings.database_path)
     await database.init()
-
-    logger.info("Загружаю документы из %s", settings.knowledge_dir)
-    chunks = load_chunks(settings.knowledge_dir)
-    if chunks:
-        logger.info("Загружено %d фрагментов", len(chunks))
-    else:
-        logger.warning("В %s не найдено PDF", settings.knowledge_dir)
-    index = SearchIndex(chunks)
 
     llm = LLMClient(
         base_url=settings.llm_base_url,

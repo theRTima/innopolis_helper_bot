@@ -46,12 +46,8 @@ data/eval/generated/
 *.log
 logs/
 tmp/
-/storage/
-
-# Qdrant / PostgreSQL / Valkey local volumes
-qdrant_storage/
+# PostgreSQL local volume
 postgres_data/
-valkey_data/
 
 # OS and IDE state
 .DS_Store

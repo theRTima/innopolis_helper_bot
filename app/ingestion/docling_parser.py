@@ -25,9 +25,9 @@ import pymupdf
 from docling.chunking import HybridChunker
 from docling.document_converter import DocumentConverter
 
-import vision_parser as vp
+from app.ingestion import vision_parser as vp
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parents[2]
 
 # A page with less readable text than this is treated as image-only and sent to
 # the vision model as a whole page.
@@ -530,7 +530,11 @@ def finalize_page(chunks, pdf_name, page_no):
 def parse_document(pdf_path, out_dir=None, pages_spec=None):
     """Parse a PDF into Docling + vision RAG chunks."""
     pdf_path = Path(pdf_path).expanduser().resolve()
-    out_dir = Path(out_dir).expanduser().resolve() if out_dir else BASE_DIR
+    out_dir = (
+        Path(out_dir).expanduser().resolve()
+        if out_dir
+        else BASE_DIR / "data" / "processed"
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     pdf_doc = pymupdf.open(pdf_path)
@@ -655,7 +659,7 @@ def main():
     )
     parser.add_argument("pdf", help="PDF path")
     parser.add_argument(
-        "--out-dir", default=None, help="Output directory (default: repo root)"
+        "--out-dir", default=None, help="Output directory (default: data/processed)"
     )
     parser.add_argument(
         "--pages",

@@ -1,10 +1,8 @@
-"""Vision-as-parser: turn a PDF into machine-usable RAG chunks.
+"""Vision-only alternative for turning a PDF into machine-usable RAG chunks.
 
-Unlike the openparse prototype, this script does not rely on text/layout parsing
-or embedding-based semantic segmentation. The vision model itself decides where
-one semantic chunk ends and the next begins, and transcribes all content --
-including diagrams, screenshots, forms and output-file icons -- into chunks that
-a Telegram assistant can retrieve and answer questions from.
+The vision model decides where one semantic chunk ends and the next begins, and
+transcribes all content -- including diagrams, screenshots, forms and
+output-file icons -- into chunks for the Telegram assistant.
 """
 
 from __future__ import annotations
@@ -20,6 +18,7 @@ from mlx_vlm import generate, load
 from mlx_vlm.prompt_utils import apply_chat_template
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = BASE_DIR / "prompts"
 
 MODEL_ID = "mlx-community/gemma-4-e4b-it-4bit"
@@ -380,7 +379,11 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
         pages_spec: Optional 1-based page selection, e.g. "4" or "4,7-9".
     """
     pdf_path = Path(pdf_path).expanduser().resolve()
-    out_dir = Path(out_dir).expanduser().resolve() if out_dir else BASE_DIR
+    out_dir = (
+        Path(out_dir).expanduser().resolve()
+        if out_dir
+        else PROJECT_DIR / "data" / "processed"
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     chunks = []
@@ -483,7 +486,7 @@ def main():
     )
     parser.add_argument("pdf", help="PDF path")
     parser.add_argument(
-        "--out-dir", default=None, help="Output directory (default: repo root)"
+        "--out-dir", default=None, help="Output directory (default: data/processed)"
     )
     parser.add_argument(
         "--pages",

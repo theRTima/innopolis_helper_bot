@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
@@ -32,33 +33,61 @@ def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
 
 
-def load_chunks(knowledge_dir: Path) -> list[Chunk]:
-    """Parse every PDF in ``knowledge_dir`` into page-aware text chunks."""
-
-    import openparse
-
+def load_chunks(chunks_dir: Path) -> list[Chunk]:
+    """Load Docling/Vision JSONL chunks prepared by ``python -m app.ingestion``."""
     chunks: list[Chunk] = []
-    parser = openparse.DocumentParser()
-    for pdf in sorted(knowledge_dir.glob("*.pdf")):
-        document = parser.parse(pdf)
-        for index, node in enumerate(document.nodes):
-            text = node.text.strip()
-            if not text:
-                continue
-            chunks.append(
-                Chunk(
-                    chunk_id=f"{pdf.stem}-{index}",
-                    document=pdf.stem,
-                    page_from=node.start_page,
-                    page_to=node.end_page,
-                    text=text,
+    for chunks_path in sorted(chunks_dir.glob("*.chunks.jsonl")):
+        with chunks_path.open(encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError as error:
+                    raise ValueError(
+                        f"{chunks_path}:{line_number}: invalid JSON"
+                    ) from error
+                if not isinstance(item, dict):
+                    raise ValueError(
+                        f"{chunks_path}:{line_number}: expected a JSON object"
+                    )
+
+                chunk_id = item.get("id")
+                source = item.get("source")
+                page = item.get("page")
+                text = item.get("text")
+                if not isinstance(chunk_id, str) or not chunk_id.strip():
+                    raise ValueError(f"{chunks_path}:{line_number}: missing chunk id")
+                if not isinstance(source, str) or not source.strip():
+                    raise ValueError(f"{chunks_path}:{line_number}: missing source")
+                if type(page) is not int or page < 1:
+                    raise ValueError(f"{chunks_path}:{line_number}: invalid page")
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError(f"{chunks_path}:{line_number}: missing search text")
+
+                chunks.append(
+                    Chunk(
+                        chunk_id=chunk_id,
+                        document=Path(source).stem,
+                        page_from=page,
+                        page_to=page,
+                        text=text.strip(),
+                    )
                 )
-            )
     return chunks
 
 
+def chunk_source_mismatches(
+    chunks: list[Chunk], knowledge_dir: Path
+) -> tuple[list[str], list[str]]:
+    """Return PDFs without chunks and chunk sources without a matching PDF."""
+    pdf_sources = {path.stem for path in knowledge_dir.glob("*.pdf")}
+    chunk_sources = {chunk.document for chunk in chunks}
+    return sorted(pdf_sources - chunk_sources), sorted(chunk_sources - pdf_sources)
+
+
 class SearchIndex:
-    """Okapi BM25 over open-parse nodes; easy to replace with Qdrant later."""
+    """Okapi BM25 over preprocessed Docling/Vision chunks."""
 
     def __init__(
         self,

@@ -26,6 +26,7 @@ class Settings:
     top_k: int
     min_score: float
     knowledge_dir: Path
+    chunks_dir: Path
     database_path: Path
     database_url: str
     documents_base_url: str
@@ -43,7 +44,8 @@ class Settings:
             top_k=int(os.getenv("TOP_K", "2")),
             min_score=float(os.getenv("MIN_SCORE", "0")),
             knowledge_dir=_path("KNOWLEDGE_DIR", "data/knowledge"),
-            database_path=_path("DATABASE_PATH", "storage/bot.db"),
+            chunks_dir=_path("CHUNKS_DIR", "data/processed"),
+            database_path=_path("DATABASE_PATH", "data/bot.sqlite3"),
             database_url=os.getenv("DATABASE_URL", "").strip(),
             documents_base_url=os.getenv("DOCUMENTS_BASE_URL", "").rstrip("/"),
             document_link_secret=os.getenv("DOCUMENT_LINK_SECRET", ""),

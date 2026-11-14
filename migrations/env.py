@@ -21,7 +21,7 @@ def _database_url() -> str:
     value = os.getenv("DATABASE_URL", "").strip()
     if value:
         return value
-    path = Path(os.getenv("DATABASE_PATH", "storage/bot.db")).expanduser().resolve()
+    path = Path(os.getenv("DATABASE_PATH", "data/bot.sqlite3")).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     return f"sqlite+aiosqlite:///{path}"
 

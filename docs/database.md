@@ -1,22 +1,26 @@
-# База данных бота
+# Bot database
 
-## Сейчас
+The database stores bot activity, not the document search index. The index is
+built from offline-generated JSONL files in `CHUNKS_DIR`; parsing and chunk
+metadata do not require a database.
 
-Бот использует SQLAlchemy 2 с асинхронными сессиями. При старте Alembic применяет миграции. По умолчанию это локальная SQLite (`DATABASE_PATH`); для PostgreSQL задаётся `DATABASE_URL=postgresql+asyncpg://...`. Файл SQLite и локальные настройки находятся в `.gitignore`.
+By default, the bot uses asynchronous SQLite at `data/bot.sqlite3`, overridden
+by `DATABASE_PATH`. PostgreSQL remains available through `DATABASE_URL`. Alembic
+applies migrations at startup. Existing `questions` and `feedback` rows are
+preserved when the schema is initialized.
 
-Первая миграция сохраняет уже существующие таблицы `questions` и `feedback` вместе с их строками. Новые вопросы пишутся одной транзакцией в `users`, `conversations`, `messages`, `answers` и `questions`. Кнопка оценки обновляет `feedback` по паре «вопрос, пользователь». Старые записи остаются в исходных таблицах; их перенос в новые таблицы при необходимости можно сделать отдельной миграцией после проверки данных.
+Each question is stored with its answer and cited sources. User, conversation
+and message rows keep the interaction history; feedback is upserted by question
+and Telegram user. The document/version/chunk/citation tables in the initial
+schema are scaffolding and are not used by the current JSONL retrieval pipeline.
 
-Таблицы `documents`, `document_versions`, `chunks` и `citations` подготовлены для следующего этапа: загрузка документов с версиями и сохранение точных источников ответа. Сейчас поиск читает файлы напрямую, поэтому цитаты ещё не записываются в эту схему. Qdrant будет хранить поисковый индекс, а PostgreSQL — текст, версию и локатор чанка. Redis для очереди и ограничения запросов здесь пока не подключён.
-
-## Команды
+Install the runtime dependencies and inspect migrations with:
 
 ```bash
 .venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python -m alembic upgrade head
 .venv/bin/python -m alembic current
-.venv/bin/python -m pytest -q tests/test_db.py
 ```
 
-Для PostgreSQL сначала создать базу и указать `DATABASE_URL` в `.env`. CLI Alembic читает переменные окружения напрямую; для запуска из терминала можно экспортировать `DATABASE_URL`. Приложение читает `.env` через `app.config`.
-
-Перед первым переходом существующей SQLite-базы на миграции стоит сохранить копию `storage/bot.db`; миграция сама не удаляет старые строки.
+Before moving an existing SQLite database, back it up. Its default location is
+`data/bot.sqlite3`; `DATABASE_URL` can be used to configure PostgreSQL instead.
