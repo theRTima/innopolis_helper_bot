@@ -35,3 +35,9 @@ def test_sources_use_same_numbering() -> None:
 
     assert "[1] Документ, стр. 7" in sources
     assert "[2] Документ, стр. 14" in sources
+
+
+def test_sources_only_include_cited_positions() -> None:
+    results = [(1.0, _chunk("best", 7, "ответ")), (0.5, _chunk("noise", 14, "шум"))]
+
+    assert _format_sources(results, {1}) == "\n\nИсточники:\n[1] Документ, стр. 7"

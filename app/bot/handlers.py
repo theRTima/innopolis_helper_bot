@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from aiogram import F, Router
 from aiogram.enums import ChatAction
@@ -36,14 +37,15 @@ LLM_ERROR_MESSAGE = (
 MAX_MESSAGE_LENGTH = 3600
 
 
-def _format_sources(results: list[tuple[float, Chunk]]) -> str:
+def _format_sources(results: list[tuple[float, Chunk]], cited: set[int] | None = None) -> str:
     if not results:
         return ""
     lines = "\n".join(
         f"[{position}] {chunk.document}, стр. {chunk.page_label}"
         for position, (_, chunk) in enumerate(results, start=1)
+        if cited is None or position in cited
     )
-    return f"\n\nИсточники:\n{lines}"
+    return f"\n\nИсточники:\n{lines}" if lines else ""
 
 
 def _truncate(text: str) -> str:
@@ -117,13 +119,16 @@ async def handle_question(
     else:
         answer = NO_RESULTS_MESSAGE
 
+    cited = {int(number) for number in re.findall(r"\[(\d+)\]", answer)}
+    cited &= set(range(1, len(results) + 1))
     sources = [
         {
             "document": chunk.document,
             "page": chunk.page_label,
             "score": round(score, 4),
         }
-        for score, chunk in results
+        for position, (score, chunk) in enumerate(results, start=1)
+        if position in cited
     ]
 
     question_id: int | None = None
@@ -138,18 +143,20 @@ async def handle_question(
     except Exception:
         logger.exception("Failed to save question")
 
-    reply = _truncate(answer) + _format_sources(results)
+    reply = _truncate(answer) + _format_sources(results, cited)
     source_links: list[tuple[str, str]] = []
     if settings.documents_base_url and settings.document_link_secret:
         seen: set[tuple[str, int]] = set()
-        for _, chunk in results:
+        for position, (_, chunk) in enumerate(results, start=1):
+            if position not in cited:
+                continue
             key = (chunk.document, chunk.page_from)
             if key in seen:
                 continue
             seen.add(key)
             source_links.append(
                 (
-                    f"Открыть источник [{len(source_links) + 1}] · стр. {chunk.page_label}",
+                    f"Открыть источник [{position}] · стр. {chunk.page_label}",
                     build_anchor_url(
                         settings.documents_base_url,
                         chunk.document,
