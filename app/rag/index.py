@@ -21,6 +21,13 @@ class Chunk:
     page_from: int
     page_to: int
     text: str
+    document_id: str | None = None
+    version_id: str | None = None
+    title: str = ""
+    chunk_type: str = "text"
+    origin: str = "docling"
+    data: dict | None = None
+    locator: dict | None = None
 
     @property
     def page_label(self) -> str:
@@ -33,48 +40,141 @@ def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
 
 
+def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
+    chunks: list[Chunk] = []
+    with chunks_path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: invalid JSON"
+                ) from error
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: expected a JSON object"
+                )
+
+            chunk_id = item.get("id")
+            source = item.get("source")
+            page = item.get("page")
+            text = item.get("text")
+            if not isinstance(chunk_id, str) or not chunk_id.strip():
+                raise ValueError(f"{chunks_path}:{line_number}: missing chunk id")
+            if not isinstance(source, str) or not source.strip():
+                raise ValueError(f"{chunks_path}:{line_number}: missing source")
+            if type(page) is not int or page < 1:
+                raise ValueError(f"{chunks_path}:{line_number}: invalid page")
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError(f"{chunks_path}:{line_number}: missing search text")
+
+            page_to = item.get("page_to", page)
+            if type(page_to) is not int or page_to < page:
+                page_to = page
+            chunks.append(
+                Chunk(
+                    chunk_id=chunk_id,
+                    document=Path(source).stem,
+                    page_from=page,
+                    page_to=page_to,
+                    text=text.strip(),
+                    document_id=item.get("document_id"),
+                    version_id=item.get("version_id"),
+                    title=str(item.get("title") or ""),
+                    chunk_type=str(item.get("type") or "text"),
+                    origin=str(item.get("origin") or "docling"),
+                    data=item.get("data")
+                    if isinstance(item.get("data"), dict)
+                    else None,
+                    locator=item.get("locator")
+                    if isinstance(item.get("locator"), dict)
+                    else None,
+                )
+            )
+    return chunks
+
+
 def load_chunks(chunks_dir: Path) -> list[Chunk]:
-    """Load Docling/Vision JSONL chunks prepared by ``python -m app.ingestion``."""
+    """Load flat Docling/Vision JSONL chunks (legacy layout)."""
     chunks: list[Chunk] = []
     for chunks_path in sorted(chunks_dir.glob("*.chunks.jsonl")):
-        with chunks_path.open(encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    item = json.loads(line)
-                except json.JSONDecodeError as error:
-                    raise ValueError(
-                        f"{chunks_path}:{line_number}: invalid JSON"
-                    ) from error
-                if not isinstance(item, dict):
-                    raise ValueError(
-                        f"{chunks_path}:{line_number}: expected a JSON object"
-                    )
-
-                chunk_id = item.get("id")
-                source = item.get("source")
-                page = item.get("page")
-                text = item.get("text")
-                if not isinstance(chunk_id, str) or not chunk_id.strip():
-                    raise ValueError(f"{chunks_path}:{line_number}: missing chunk id")
-                if not isinstance(source, str) or not source.strip():
-                    raise ValueError(f"{chunks_path}:{line_number}: missing source")
-                if type(page) is not int or page < 1:
-                    raise ValueError(f"{chunks_path}:{line_number}: invalid page")
-                if not isinstance(text, str) or not text.strip():
-                    raise ValueError(f"{chunks_path}:{line_number}: missing search text")
-
-                chunks.append(
-                    Chunk(
-                        chunk_id=chunk_id,
-                        document=Path(source).stem,
-                        page_from=page,
-                        page_to=page,
-                        text=text.strip(),
-                    )
-                )
+        chunks.extend(_read_chunk_file(chunks_path))
     return chunks
+
+
+def _latest_chunk_manifest(version_path: Path) -> Path | None:
+    candidates: list[tuple[str, Path]] = []
+    for manifest_path in version_path.glob("chunks/*/chunk_manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if manifest.get("status") != "ready":
+            continue
+        candidates.append(
+            (str(manifest.get("created_at", "")), manifest_path)
+        )
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
+    """Load the newest ready chunk set from the versioned rag_pipeline store."""
+    best: dict[str, tuple[str, Path]] = {}
+    for manifest_path in documents_root.glob("*/sha256-*/manifest.json"):
+        try:
+            source_manifest = json.loads(
+                manifest_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        document_id = source_manifest.get("document_id")
+        if not isinstance(document_id, str):
+            continue
+        chunk_manifest_path = _latest_chunk_manifest(manifest_path.parent)
+        if chunk_manifest_path is None:
+            continue
+        try:
+            chunk_manifest = json.loads(
+                chunk_manifest_path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            continue
+        created = str(chunk_manifest.get("created_at", ""))
+        chunks_file = chunk_manifest_path.parent / "chunks.jsonl"
+        if not chunks_file.is_file():
+            continue
+        current = best.get(document_id)
+        if current is None or (created, str(chunks_file)) > (
+            current[0],
+            str(current[1]),
+        ):
+            best[document_id] = (created, chunks_file)
+
+    chunks: list[Chunk] = []
+    for _created, chunks_file in best.values():
+        chunks.extend(_read_chunk_file(chunks_file))
+    return chunks
+
+
+def load_chunks_auto(
+    chunks_dir: Path, documents_root: Path
+) -> tuple[list[Chunk], str]:
+    """Prefer the versioned store and fill in flat chunks for other documents."""
+    versioned = load_versioned_chunks(documents_root)
+    if not versioned:
+        return load_chunks(chunks_dir), "flat"
+
+    covered = {chunk.document for chunk in versioned}
+    additions = [
+        chunk for chunk in load_chunks(chunks_dir) if chunk.document not in covered
+    ]
+    if additions:
+        return versioned + additions, "mixed"
+    return versioned, "versioned"
 
 
 def chunk_source_mismatches(

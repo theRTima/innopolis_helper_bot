@@ -49,16 +49,45 @@ history and feedback are stored in `data/bot.sqlite3`.
 
 ## Versioned document pipeline
 
-The separate `rag_pipeline` commands validate and snapshot supported files,
-then render previews. This does not create the JSONL chunks consumed by the
-bot; use `app.ingestion` for that. Office previews require LibreOffice.
+`rag_pipeline` validates and snapshots supported files, renders previews, and
+creates versioned retrieval chunks. The bot prefers these chunks and falls back
+to the older flat `data/processed/*.chunks.jsonl` files during migration.
+Office previews and Office extraction require LibreOffice.
 
 ```bash
 .venv/bin/rag-ingest "/path/to/document.pdf" --document-id travel
 .venv/bin/rag-render "/path/from/ingest/output" --dpi 150
-# Or render all stored versions:
+.venv/bin/rag-extract "/path/from/ingest/output"
+# Or process all stored versions:
 .venv/bin/rag-render --all
+.venv/bin/rag-extract --all
 ```
+
+Each version gets its own cacheable chunk set:
+
+```text
+data/processed/documents/<document-id>/sha256-<hash>/
+  original.*
+  manifest.json
+  renders/render-<hash>/
+  chunks/chunk-<hash>/
+    chunks.jsonl
+    chunks.md
+    chunk_manifest.json
+```
+
+Extraction uses Docling for structure and the normalized vision prompts for
+pictures and unreadable pages. `python -m app.ingestion` remains available as a
+legacy flat-output command, but `rag-extract` is the versioned path.
+
+To inspect one version without touching production chunks, use a debug page
+selection:
+
+```bash
+.venv/bin/rag-extract "/path/to/version" --pages 4,7
+```
+
+Debug extracts have `status: partial` and are ignored by the bot.
 
 ## Tests
 

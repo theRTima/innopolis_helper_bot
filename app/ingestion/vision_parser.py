@@ -41,8 +41,12 @@ _model = None
 _processor = None
 
 env = Environment(loader=FileSystemLoader(PROMPTS_DIR))
-chunker_prompt = env.get_template("vision_chunker.j2")
-analysis_prompt = env.get_template("image_analysis.j2")
+# Legacy image -> chunk flow used by the flat ingestion CLI.
+chunker_prompt = env.get_template("legacy/vision_chunker.j2")
+analysis_prompt = env.get_template("legacy/image_analysis.j2")
+# Normalized-element flow used by rag_pipeline.extract.
+normalized_chunker_prompt = env.get_template("vision_chunker.j2")
+normalized_analysis_prompt = env.get_template("image_analysis.j2")
 
 
 def get_model():
@@ -172,6 +176,9 @@ def extract_chunks(
         raw_chunks = [parsed]
     chunks = normalize_chunks(raw_chunks, pdf_name, page_number, mode, start_index)
 
+    # A valid empty chunks array means the model found no meaningful content.
+    if raw_chunks is not None:
+        return chunks
     if chunks:
         return chunks
 

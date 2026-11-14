@@ -14,13 +14,30 @@ dependencies = [
     "python-pptx>=1,<2",
     "Pillow>=11,<14",
     "pypdfium2>=5,<6",
+    "aiogram>=3.15,<4",
+    "fastapi>=0.115,<1",
+    "aiosqlite>=0.20",
+    "alembic>=1.13,<2",
+    "asyncpg>=0.29,<1",
+    "openai>=1.40",
+    "python-dotenv>=1.0",
+    "snowballstemmer>=2.2",
+    "SQLAlchemy[asyncio]>=2.0,<3",
+    "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.scripts]
 rag-ingest = "rag_pipeline.ingest:main"
 rag-render = "rag_pipeline.render:main"
+rag-extract = "rag_pipeline.extract:main"
 
 [project.optional-dependencies]
+ingestion = [
+    "docling",
+    "Jinja2",
+    "mlx-vlm",
+    "PyMuPDF",
+]
 dev = ["flake8>=7,<8", "black>=26,<27"]
 
 [tool.black]
@@ -37,4 +54,4 @@ testpaths = ["tests"]
 include = ["rag_pipeline*", "app*"]
 
 [tool.setuptools.package-data]
-"app.ingestion" = ["prompts/*"]
+"app.ingestion" = ["prompts/*", "prompts/legacy/*"]
