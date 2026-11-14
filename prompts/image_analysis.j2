@@ -1,8 +1,14 @@
 {% autoescape true %}
 
-Analyze this image and return a detailed JSON description including any text detected, images detected, tables detected, latex equations detected, extracted text and confidence score for the extracted text.
+Analyze this image and return a detailed JSON description including any text detected, images detected, tables detected, latex equations detected, diagrams detected, extracted text and confidence score for the extracted text.
 - Confidence score for the extracted text should be a float value between 0 and 1. If you cannot determine certain details, leave those fields empty or zero.
 - Ensure markdown text formatting for extracted text is applied properly by analyzing the image.
+- Pay special attention to diagrams: flowcharts, process schemes, sequence diagrams, org charts, mind maps and any picture with boxes, arrows or decision branches.
+- If a diagram is present, do not just report its title. Read every label inside it and explain the full logic: the start point, the order of actions, decision points, conditions on each branch, loops, actors responsible and the end state.
+- Set diagram_detected to "Yes" only when the image actually contains a diagram or process scheme, not for ordinary illustrations.
+- diagram_nodes must list the visible labels/blocks/actors exactly as written in the image.
+- diagram_connections must list directed links as "source -> target" and include the label or condition written on the arrow when there is one.
+- diagram_description must be a self-contained explanation that can be understood without seeing the image.
 - Please ensure that the JSON object is valid and all the fields are present in the response as below:
 
 ```json
@@ -11,6 +17,11 @@ Analyze this image and return a detailed JSON description including any text det
     "images_detected": "Yes" | "No",
     "tables_detected": "Yes" | "No",
     "latex_equations_detected": "Yes" | "No",
+    "diagram_detected": "Yes" | "No",
+    "diagram_type": "flowchart" | "process scheme" | "sequence diagram" | "org chart" | "mind map" | "other" | "none",
+    "diagram_description": "Detailed explanation of the diagram, its purpose and the business logic it encodes",
+    "diagram_nodes": ["label or actor as written in the diagram"],
+    "diagram_connections": ["source -> target (condition or arrow label)"],
     "extracted_text": "Extracted text from the image",
     "confidence_score_text": "Confidence score for the extracted text"
 }

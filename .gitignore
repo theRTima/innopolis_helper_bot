@@ -33,6 +33,7 @@ data/eval/generated/
 
 *.pdf
 *.md
+!README.md
 *.db
 *.sqlite
 *.sqlite3
