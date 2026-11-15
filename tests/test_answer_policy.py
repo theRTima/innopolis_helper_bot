@@ -1,5 +1,19 @@
-from app.llm.policy import thinking_options, completion_options
+from app.llm.policy import (
+    answer_format_options,
+    thinking_options,
+    completion_options,
+)
 import pytest
+
+
+def test_native_json_format_is_scoped_to_tested_provider_and_model():
+    assert answer_format_options(
+        "https://opencode.ai/zen/go/v1", "qwen3.8-flash"
+    ) == {"response_format": {"type": "json_object"}}
+    assert (
+        answer_format_options("https://example.com/v1", "qwen3.8-flash") == {}
+    )
+    assert answer_format_options("https://opencode.ai/v1", "other") == {}
 
 
 def test_thinking_default_is_provider_and_model_scoped():
@@ -88,7 +102,10 @@ def test_real_client_payload_and_no_reasoning_leak(monkeypatch):
         max_tokens=900,
         temperature=0.1,
     )
-    answer = asyncio.run(client.answer_question("Вопрос", []))
+    from app.rag.index import Chunk
+
+    chunk = Chunk("c", "doc", 1, 1, "Документированный ответ")
+    answer = asyncio.run(client.answer_question("Вопрос", [(1, chunk)]))
     assert "PRIVATE" not in answer
     assert captured["init"]["timeout"] == 20
     assert captured["init"]["max_retries"] == 0
@@ -97,4 +114,5 @@ def test_real_client_payload_and_no_reasoning_leak(monkeypatch):
         "thinking_budget": 512,
     }
     assert captured["request"]["max_completion_tokens"] == 1400
+    assert captured["request"]["response_format"] == {"type": "json_object"}
     assert "max_tokens" not in captured["request"]

@@ -515,6 +515,16 @@ The address remains `http://127.0.0.1:8001/admin/`; `ADMIN_PORT` can change the
 host port. Stop any local uvicorn process already using this port first. A
 missing or incorrect reader password prevents the panel from accessing data.
 
+## Documentation-only answers
+
+The bot refuses common instruction overrides and unrelated writing/coding
+requests before calling the model. Questions and source text are treated as
+untrusted data. Model output must follow a fixed response schema and cite valid
+source IDs; malformed or uncited output is replaced with a fixed response.
+These controls reduce prompt-injection risk but do not guarantee semantic
+grounding or resistance to every jailbreak. See
+[the security notes](docs/prompt-injection.md) for controls and limitations.
+
 ## Retrieval
 
 - `TOP_K` defaults to `2` initial seeds, matching `fix/visual-rag-evidence`.

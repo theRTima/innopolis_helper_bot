@@ -3,6 +3,15 @@
 from urllib.parse import urlparse
 
 
+def answer_format_options(base_url, model):
+    if (
+        urlparse(base_url).hostname == "opencode.ai"
+        and model == "qwen3.8-flash"
+    ):
+        return {"response_format": {"type": "json_object"}}
+    return {}
+
+
 def thinking_options(base_url, model, enabled=None, budget=None):
     known = (
         urlparse(base_url).hostname == "opencode.ai"
