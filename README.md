@@ -24,25 +24,23 @@ Python dependencies are split into:
 
 | File | Purpose |
 | --- | --- |
-| `requirements.txt` | Bot, database, retrieval and API dependencies |
-| `requirements-ingestion.txt` | Docling, Jinja2, PyMuPDF |
-| `requirements-dev.txt` | Test and lint dependencies |
+| `requirements/base.txt` | Installs the project and all runtime dependencies from `pyproject.toml` |
+| `requirements/ingestion.txt` | Docling, Jinja2, PyMuPDF |
+| `requirements/dev.txt` | Test and lint dependencies |
 
 ## 1. Install
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m pip install -r requirements-ingestion.txt
+.venv/bin/python -m pip install -r requirements/base.txt
+.venv/bin/python -m pip install -r requirements/ingestion.txt
 ```
 
 If the environment has no `pip`, install with `uv` instead:
 
 ```bash
-uv pip install --python .venv/bin/python -e .
-uv pip install --python .venv/bin/python -r requirements.txt
-uv pip install --python .venv/bin/python -r requirements-ingestion.txt
+uv pip install --python .venv/bin/python -r requirements/base.txt
+uv pip install --python .venv/bin/python -r requirements/ingestion.txt
 ```
 
 ## 2. Configure `.env`
@@ -69,7 +67,7 @@ The same model settings are used by:
 
 - the bot for answer generation;
 - `app.ingestion` for diagrams and page fallback;
-- `rag_pipeline.extract` for the normalized vision pipeline.
+- `app.rag.extract` for the normalized vision pipeline.
 
 The model must support **image input** for document extraction. A text-only
 model can answer questions from existing chunks but cannot process new PDFs or
@@ -87,11 +85,11 @@ images.
 | `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Client identification |
 | `ANSWER_MAX_TOKENS` | `600` | Answer generation limit |
 | `TEMPERATURE` | `0.1` | Answer generation temperature |
-| `TOP_K` | `2` | Number of chunks passed to the LLM |
+| `TOP_K` | `6` | Number of chunks passed to the LLM |
 | `MIN_SCORE` | `0` | Minimum BM25 score |
 | `KNOWLEDGE_DIR` | `data/knowledge` | Source PDF directory for the legacy flat pipeline |
 | `CHUNKS_DIR` | `data/processed` | Legacy flat chunk directory |
-| `DOCUMENTS_DIR` | `data/processed/documents` | Versioned `rag_pipeline` store |
+| `DOCUMENTS_DIR` | `data/processed/documents` | Versioned `app/rag` store |
 | `DATABASE_PATH` | `data/bot.sqlite3` | SQLite path |
 | `DATABASE_URL` | — | Optional PostgreSQL URL |
 | `DOCUMENTS_BASE_URL` | — | Public viewer URL for signed source links |
@@ -103,7 +101,7 @@ for generic OpenAI-compatible providers.
 
 ## 3. Prepare documentation
 
-There are two supported workflows. The versioned `rag_pipeline` workflow is
+There are two supported workflows. The versioned `app/rag` workflow is
 recommended; the flat `app.ingestion` workflow remains for migration and simple
 PDF-only deployments.
 
@@ -111,25 +109,25 @@ PDF-only deployments.
 
 ```bash
 # 1. Store an immutable version
-.venv/bin/python -m rag_pipeline.ingest \
+.venv/bin/python -m app.rag.ingest \
   "data/knowledge/БП Командировка.pdf" \
   --document-id travel
 
 # 2. Render a preview (optional for PDF, required for Office)
-.venv/bin/python -m rag_pipeline.render \
+.venv/bin/python -m app.rag.render \
   "data/processed/documents/travel/sha256-<hash>" \
   --dpi 150
 
 # 3. Extract retrieval chunks
-.venv/bin/python -m rag_pipeline.extract \
+.venv/bin/python -m app.rag.extract \
   "data/processed/documents/travel/sha256-<hash>"
 ```
 
 Batch mode:
 
 ```bash
-.venv/bin/python -m rag_pipeline.render --all
-.venv/bin/python -m rag_pipeline.extract --all
+.venv/bin/python -m app.rag.render --all
+.venv/bin/python -m app.rag.extract --all
 ```
 
 The console scripts are also available after `pip install -e .`:
@@ -166,7 +164,7 @@ documents that have not been migrated yet.
 ### Debug a single version
 
 ```bash
-.venv/bin/python -m rag_pipeline.extract \
+.venv/bin/python -m app.rag.extract \
   "data/processed/documents/travel/sha256-<hash>" \
   --pages 4,7
 ```
@@ -215,12 +213,12 @@ data/knowledge/*.pdf
         │
         ├── legacy ── app.ingestion ── data/processed/*.chunks.jsonl
         │
-        └── versioned ── rag_pipeline.ingest
+        └── versioned ── app.rag.ingest
                               │
-                              ├── rag_pipeline.render
+                              ├── app.rag.render
                               │     └── pages/frames/HTML previews
                               │
-                              └── rag_pipeline.extract
+                              └── app.rag.extract
                                     └── versioned chunks
         │
         ▼
@@ -248,6 +246,19 @@ SQLite/PostgreSQL
 7. The model never copies source text into the final chunk; it only groups
    references, so malformed model output cannot silently rewrite facts.
 8. Missing structured elements are recovered deterministically.
+
+### Retrieval behavior
+
+- `TOP_K` defaults to `6`, so several text and visual chunks reach the LLM.
+- Table-of-contents chunks are skipped for normal questions; they are used only
+  when the query asks for contents, sections or structure.
+- Diagram/image/screenshot chunks get a small BM25 boost for their title and
+  document name, because long visual chunks are otherwise penalised by length.
+- Visual queries such as “схема”, “диаграмма”, “рисунок”, “процесс” or “шаги”
+  always receive the best matching visual chunks, even if BM25 ranks several
+  text chunks above them.
+- The answer prompt explicitly tells the LLM to use diagram nodes/edges and
+  table rows/columns when present.
 
 ## Storage layout
 
@@ -331,7 +342,7 @@ Set `SOFFICE_PATH` if `soffice` is not on `PATH`.
 ## Tests
 
 ```bash
-.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pip install -r requirements/dev.txt
 .venv/bin/python -m pytest
 ```
 
@@ -355,13 +366,13 @@ Run one of:
 ```bash
 .venv/bin/python -m app.ingestion
 # or the full versioned pipeline:
-.venv/bin/python -m rag_pipeline.extract --all
+.venv/bin/python -m app.rag.extract --all
 ```
 
 ### `Не обработаны PDF: ...`
 
 A PDF in `data/knowledge/` has no matching chunks. Run the legacy ingestion or
-migrate it through `rag_pipeline.ingest` → `render` → `extract`.
+migrate it through `app.rag.ingest` → `render` → `extract`.
 
 ### `Extraction is locked`
 

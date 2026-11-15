@@ -27,9 +27,9 @@ dependencies = [
 ]
 
 [project.scripts]
-rag-ingest = "rag_pipeline.ingest:main"
-rag-render = "rag_pipeline.render:main"
-rag-extract = "rag_pipeline.extract:main"
+rag-ingest = "app.rag.ingest:main"
+rag-render = "app.rag.render:main"
+rag-extract = "app.rag.extract:main"
 
 [project.optional-dependencies]
 ingestion = [
@@ -50,7 +50,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
-include = ["rag_pipeline*", "app*"]
+include = ["app*"]
 
 [tool.setuptools.package-data]
 "app.ingestion" = ["prompts/*", "prompts/legacy/*"]

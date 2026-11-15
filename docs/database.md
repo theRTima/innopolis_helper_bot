@@ -17,7 +17,7 @@ schema are scaffolding and are not used by the current JSONL retrieval pipeline.
 Install the runtime dependencies and inspect migrations with:
 
 ```bash
-.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements/base.txt
 .venv/bin/python -m alembic upgrade head
 .venv/bin/python -m alembic current
 ```
