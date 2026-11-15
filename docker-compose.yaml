@@ -1,9 +1,20 @@
 name: innopolis-helper-bot
 
+# Bound the size of Docker's JSON logs so a long-running bot cannot fill the
+# disk with container output.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-app: &app
   build: .
   image: innopolis-helper-bot:local
   env_file: .env
+  init: true
+  stop_grace_period: 20s
+  logging: *default-logging
   environment:
     DATABASE_URL: postgresql+asyncpg://bot:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/bot
     KNOWLEDGE_DIR: /app/data/knowledge
@@ -16,6 +27,7 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5438}:5432"
     environment:
@@ -66,6 +78,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 20s
 
   analytics:
     <<: *app
@@ -129,10 +142,12 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+      start_period: 30s
 
   grafana:
     image: grafana/grafana:12.2.0
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -164,9 +179,15 @@ services:
       - "/app/data/knowledge"
       - "--storage-root"
       - "/app/data/processed/documents"
+    environment:
+      HOME: /cache
+      XDG_CACHE_HOME: /cache
+      HF_HOME: /cache/huggingface
+      DOCLING_ARTIFACTS_PATH: /cache/docling
     volumes:
       - ./data/knowledge:/app/data/knowledge:ro
       - ./data/processed:/app/data/processed
+      - ingest_cache:/cache
 
   # Persistent worker used by the admin upload page. It shares the inbox and
   # versioned store with the admin and bot, but keeps parsing off web requests.
@@ -184,12 +205,17 @@ services:
       DOCUMENTS_DIR: /app/data/processed/documents
       DOCUMENT_INBOX_DIR: /app/data/inbox
       KNOWLEDGE_DIR: /app/data/knowledge
+      HOME: /cache
+      XDG_CACHE_HOME: /cache
+      HF_HOME: /cache/huggingface
+      DOCLING_ARTIFACTS_PATH: /cache/docling
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./data/inbox:/app/data/inbox
       - ./data/processed:/app/data/processed
+      - ingest_cache:/cache
 
   # Optional containerised llama.cpp server. Put GGUF files into ./.models and
   # set LLM_BASE_URL=http://llama:8080/v1 in .env.
@@ -197,6 +223,7 @@ services:
     image: ghcr.io/ggml-org/llama.cpp:server
     profiles: ["llm"]
     restart: unless-stopped
+    logging: *default-logging
     command:
       - "-m"
       - "/models/${LLAMA_MODEL_FILE:-model.gguf}"
@@ -218,3 +245,4 @@ services:
 volumes:
   postgres_data:
   grafana_data:
+  ingest_cache:

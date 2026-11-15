@@ -1,41 +1,76 @@
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PYTHONPATH=/app
+    PYTHONPATH=/app \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
 WORKDIR /app
 
+# LibreOffice is by far the largest apt dependency. The -nogui variants can
+# still convert DOCX/XLSX/PPTX headlessly but skip the desktop stack
+# (mesa/GTK), which keeps this layer noticeably smaller.
 ARG INSTALL_OFFICE=1
-RUN apt-get update \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update \
     && apt-get install -y --no-install-recommends \
         libgl1 \
         libglib2.0-0 \
     && if [ "$INSTALL_OFFICE" = "1" ]; then \
         apt-get install -y --no-install-recommends \
-            libreoffice-writer \
-            libreoffice-calc \
-            libreoffice-impress \
+            libreoffice-writer-nogui \
+            libreoffice-calc-nogui \
+            libreoffice-impress-nogui \
             fonts-dejavu-core; \
-    fi \
-    && rm -rf /var/lib/apt/lists/*
+    fi
 
+# Dependency layer: the stub package keeps ``-e .`` working without copying the
+# real sources, so code edits do not reinstall PyTorch/Docling.
 COPY pyproject.toml ./
 COPY requirements ./requirements
-COPY app ./app
-COPY scripts ./scripts
+RUN mkdir -p app && touch app/__init__.py
 
 # Install CPU-only PyTorch first. The default Linux wheel pulls CUDA/NVIDIA
 # libraries that are unnecessary for document extraction and can exhaust
-# Docker disk space.
-RUN pip install --index-url https://download.pytorch.org/whl/cpu \
-    torch torchvision
+# Docker disk space. Test binaries, headers and C++ test suites are not used by
+# inference and are dropped in the same layer so they never reach the image.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --index-url https://download.pytorch.org/whl/cpu \
+        torch torchvision \
+    && rm -rf \
+        /usr/local/lib/python3.12/site-packages/torch/test \
+        /usr/local/lib/python3.12/site-packages/torch/include \
+        /usr/local/lib/python3.12/site-packages/torch/bin/test_* \
+        /usr/local/lib/python3.12/site-packages/torch/bin/FileStoreTest \
+        /usr/local/lib/python3.12/site-packages/torch/bin/HashStoreTest \
+        /usr/local/lib/python3.12/site-packages/torch/bin/TCPStoreTest
 
-RUN pip install -r requirements/ingestion.txt
+# Docling pulls large transitive dependency trees. Drop upstream test suites
+# (pandas/tests alone is ~43 MB) in the same layer after installation.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements/ingestion.txt \
+    && find /usr/local/lib/python3.12/site-packages \
+        -type d \( -name tests -o -name test \) -prune -exec rm -rf '{}' +
 
-RUN useradd --create-home --uid 1000 app \
-    && chown -R app:app /app
+RUN rm -rf app
+
+COPY --chown=1000:1000 app ./app
+COPY --chown=1000:1000 scripts ./scripts
+
+# Docling/Hugging Face caches survive container restarts via a named volume in
+# docker-compose.yaml, and are writable for the host UID used by the worker.
+RUN mkdir -p /cache \
+    && chmod 1777 /cache \
+    && useradd --create-home --uid 1000 app
+
+ENV HOME=/cache \
+    XDG_CACHE_HOME=/cache \
+    HF_HOME=/cache/huggingface \
+    DOCLING_ARTIFACTS_PATH=/cache/docling \
+    TMPDIR=/tmp
 
 USER app
 

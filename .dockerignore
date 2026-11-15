@@ -1,4 +1,6 @@
 .git
+.gitignore
+.github
 .venv
 venv
 .models
@@ -15,9 +17,17 @@ qdrant_storage
 valkey_data
 vendor
 .pytest_cache
+.mypy_cache
+.ruff_cache
 __pycache__
 *.pyc
+*.pyo
 *.gguf
 *.sqlite*
 *.db
 *.pdf
+tests
+docs
+observability
+*.md
+.DS_Store
