@@ -38,6 +38,9 @@ data/cache/
 data/eval/generated/
 *.embedding.json
 *.chunks.jsonl
+*.chunks.jsonl.tmp
+*.chunks.meta.json
+*.chunks.meta.json.tmp
 *.chunks.md
 
 # Runtime state
@@ -48,6 +51,7 @@ data/eval/generated/
 logs/
 tmp/
 # PostgreSQL local volume
+/storage/
 postgres_data/
 
 # OS and IDE state

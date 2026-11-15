@@ -1,0 +1,48 @@
+{
+  "uid": "bot-analytics",
+  "title": "Bot analytics",
+  "tags": ["bot", "analytics"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": {"from": "now-30d", "to": "now"},
+  "panels": [
+    {
+      "id": 1, "title": "Вопросов всего", "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_answer_daily"}]
+    },
+    {
+      "id": 2, "title": "Ответов с источниками", "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_answer_daily WHERE status = 'with_sources'"}]
+    },
+    {
+      "id": 3, "title": "Не помогло", "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_feedback_daily WHERE status = 'not_helpful'"}]
+    },
+    {
+      "id": 4, "title": "Ссылок специалисту отправлено", "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_operator_daily WHERE status = 'delivered'"}]
+    },
+    {
+      "id": 5, "title": "Статусы ответов", "type": "table",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 5},
+      "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT status, sum(total)::bigint AS questions FROM grafana_answer_daily GROUP BY status ORDER BY questions DESC"}]
+    },
+    {
+      "id": 6, "title": "Импорт документов", "type": "table",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 5},
+      "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT day, imports, model_calls, cache_hits, avg_parse_ms FROM grafana_import_daily ORDER BY day DESC LIMIT 30"}]
+    }
+  ]
+}

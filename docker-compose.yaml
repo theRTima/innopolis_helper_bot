@@ -16,6 +16,8 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5438}:5432"
     environment:
       POSTGRES_USER: bot
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -64,6 +66,23 @@ services:
       timeout: 5s
       retries: 3
 
+  grafana:
+    image: grafana/grafana:12.2.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?set GRAFANA_DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana:/etc/grafana/provisioning:ro
+
   # One-shot versioned pipeline for every PDF currently in data/knowledge.
   # Add files to ./data/knowledge and rerun; no .env changes are required.
   ingest:
@@ -111,3 +130,4 @@ services:
 
 volumes:
   postgres_data:
+  grafana_data:

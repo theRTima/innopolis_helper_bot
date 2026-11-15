@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -78,6 +78,8 @@ class Document(Base):
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     format: Mapped[str] = mapped_column(String(16), nullable=False)
+    # The bot retrieves chunks only from this version. Older versions remain available.
+    active_version: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
 
 
@@ -89,6 +91,7 @@ class DocumentVersion(Base):
     document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), nullable=False, index=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    chunks_sha256: Mapped[str | None] = mapped_column(String(64))
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
 
@@ -100,9 +103,35 @@ class Chunk(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     document_version_id: Mapped[int] = mapped_column(ForeignKey("document_versions.id"), nullable=False, index=True)
     ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Parser-provided identifier, e.g. "document.pdf:p6:c0"; DB id remains the PK.
+    external_id: Mapped[str | None] = mapped_column(String(500))
+    title: Mapped[str | None] = mapped_column(String(500))
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str | None] = mapped_column(Text)
+    # Structured parser output, such as table cells or normalized vision fields.
+    data: Mapped[dict | list | None] = mapped_column(JSON)
+    chunk_type: Mapped[str | None] = mapped_column(String(64))
+    origin: Mapped[str | None] = mapped_column(String(64))
     locator_kind: Mapped[str] = mapped_column(String(32), nullable=False)
     locator_value: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class ImportRun(Base):
+    __tablename__ = "import_runs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), nullable=False, index=True)
+    document_version_id: Mapped[int] = mapped_column(ForeignKey("document_versions.id"), nullable=False)
+    parser: Mapped[str] = mapped_column(String(32), nullable=False)
+    imported: Mapped[bool] = mapped_column(nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_calls: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    cache_hits: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    parse_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    text_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    vision_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    total_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
 
 
 class Answer(Base):
@@ -114,6 +143,21 @@ class Answer(Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
+
+
+class Analitics(Base):
+    __tablename__ = "analytics"
+    __table_args__ = (
+        CheckConstraint("answer_status IN ('with_sources', 'no_evidence', 'unverified', 'error') OR answer_status IS NULL", name="ck_analytics_answer_status"),
+        CheckConstraint("operator_status IN ('requested', 'delivered', 'failed') OR operator_status IS NULL", name="ck_analytics_operator_status"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), unique=True, nullable=False)
+    answer_status: Mapped[str | None] = mapped_column(String(32))
+    operator_status: Mapped[str | None] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), onupdate=func.current_timestamp())
 
 
 class Citation(Base):

@@ -311,10 +311,22 @@ The optional local llama.cpp profile can be started with:
 docker compose --profile llm up -d llama
 ```
 
-The current Compose file does not include Grafana because the current branch
-does not contain the observability provisioning assets. Office ingestion works
-because `Dockerfile.ingest` installs LibreOffice by default; set
-`--build-arg INSTALL_OFFICE=0` to skip it.
+Grafana is available at `http://localhost:3000/d/bot-analytics`. Set
+`GRAFANA_ADMIN_PASSWORD` and `GRAFANA_DB_PASSWORD` in `.env`, then initialize
+the aggregate views and their read-only database role once after migrations:
+
+```bash
+docker compose run --rm --no-deps bot alembic upgrade head
+docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
+docker compose up -d grafana
+```
+
+Log in as `admin` using `GRAFANA_ADMIN_PASSWORD`. This branch does not yet
+write answer and operator statuses to the `analytics` table; the dashboard
+shows existing records until that integration is added.
+
+Office ingestion works because `Dockerfile.ingest` installs LibreOffice by
+default; set `--build-arg INSTALL_OFFICE=0` to skip it.
 
 Logs and shutdown:
 

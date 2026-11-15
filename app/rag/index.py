@@ -130,6 +130,31 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
     return chunks
 
 
+def load_flat_chunks(knowledge_dir: Path) -> list[Chunk]:
+    """Load existing PDF sidecars, checking hashes when metadata is present."""
+    chunks: list[Chunk] = []
+    for pdf in sorted(knowledge_dir.glob("*.pdf")):
+        chunk_file = pdf.with_suffix(".chunks.jsonl")
+        if not chunk_file.is_file():
+            continue
+        meta_file = pdf.with_suffix(".chunks.meta.json")
+        if meta_file.is_file():
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            if (not meta.get("complete") or
+                    hashlib.sha256(pdf.read_bytes()).hexdigest() != meta.get("source_sha256") or
+                    hashlib.sha256(chunk_file.read_bytes()).hexdigest() != meta.get("chunks_sha256")):
+                logger.warning("Skipping outdated or incomplete chunks: %s", chunk_file)
+                continue
+        else:
+            logger.warning("Chunk provenance cannot be verified: %s", chunk_file)
+        loaded = _read_chunk_file(chunk_file)
+        if any(chunk.document != pdf.stem for chunk in loaded):
+            logger.warning("Skipping chunks with mismatched source: %s", chunk_file)
+            continue
+        chunks.extend(loaded)
+    return chunks
+
+
 def _latest_chunk_manifest(version_path: Path) -> Path | None:
     candidates: list[tuple[str, Path]] = []
     for manifest_path in version_path.glob("chunks/*/chunk_manifest.json"):

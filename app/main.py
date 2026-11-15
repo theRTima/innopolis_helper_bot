@@ -13,7 +13,7 @@ from aiogram.exceptions import TelegramUnauthorizedError
 from app.bot.handlers import router
 from app.config import Settings
 from app.llm.client import LLMClient
-from app.rag.index import SearchIndex, load_versioned_chunks
+from app.rag.index import SearchIndex, load_flat_chunks, load_versioned_chunks
 from app.storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,10 @@ async def run() -> int:
         settings.documents_dir,
     )
     chunks = load_versioned_chunks(settings.documents_dir)
+    source_mode = "versioned"
+    if not chunks:
+        chunks = load_flat_chunks(settings.knowledge_dir)
+        source_mode = "flat"
     if not chunks:
         logger.error(
             "Чанки не найдены. Выполните: "
@@ -54,7 +58,7 @@ async def run() -> int:
             "Выполните ingest -> render -> extract.",
             ", ".join(missing),
         )
-    logger.info("Загружено %d фрагментов (versioned)", len(chunks))
+    logger.info("Загружено %d фрагментов (%s)", len(chunks), source_mode)
     index = SearchIndex(chunks)
 
     database = Database(settings.database_url or settings.database_path)
