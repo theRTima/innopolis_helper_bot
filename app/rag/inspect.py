@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.rag.context import format_context
 from app.rag.index import SearchIndex, load_chunks_auto
+from app.rag.representation import query_representation, search_representation
 
 
 def inspect_retrieval(
@@ -26,6 +27,7 @@ def inspect_retrieval(
         "types": dict(Counter(chunk.chunk_type for chunk in chunks)),
         "selected_files": sorted({chunk.chunk_file for chunk in chunks}),
         "question": question,
+        "search_query": query_representation(question),
         "top_k": top_k,
         "min_score": min_score,
         "results": [
@@ -40,6 +42,7 @@ def inspect_retrieval(
                 "page": chunk.page_label,
                 "chunk_file": chunk.chunk_file,
                 "text": chunk.text,
+                "search_representation": search_representation(chunk),
             }
             for rank, (score, chunk) in enumerate(results, 1)
         ],

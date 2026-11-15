@@ -1,0 +1,31 @@
+{
+  "document_id": "travel",
+  "scope": "Retrieval evidence only, not generated-answer correctness",
+  "cases": [
+    {
+      "id": "approvers",
+      "question": "Мне необходимо узнать, кто согласовывает БП Командировки?",
+      "evidence_groups": [[4], [9], [15]]
+    },
+    {
+      "id": "office-hours",
+      "question": "Мне не отвечает офис-менеджер, какой у него график работы?",
+      "evidence_groups": [[3]]
+    },
+    {
+      "id": "routing-conditions",
+      "question": "Какие могут быть условия в выборе следующего согласующего лица БП Командировка?",
+      "evidence_groups": [[4], [7, 8], [9, 10, 11]]
+    },
+    {
+      "id": "create-request",
+      "question": "Как создать заявку на командировку? Опиши шаги.",
+      "evidence_groups": [[7], [9]]
+    },
+    {
+      "id": "process-diagram",
+      "question": "Опиши схему бизнес-процесса «Командировка»: основные этапы по порядку.",
+      "evidence_groups": [[4]]
+    }
+  ]
+}

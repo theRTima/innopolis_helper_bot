@@ -12,6 +12,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import snowballstemmer
+from app.rag.representation import (
+    is_navigation,
+    query_representation,
+    search_representation,
+)
 
 TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
 logger = logging.getLogger(__name__)
@@ -34,6 +39,7 @@ class Chunk:
     chunk_file: str = field(default="", compare=False)
     asset_ids: tuple[str, ...] = field(default=(), compare=False)
     assets: tuple[dict, ...] = field(default=(), compare=False)
+    content: str = field(default="", compare=False)
 
     @property
     def page_label(self) -> str:
@@ -92,6 +98,7 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
                     page_from=page,
                     page_to=page_to,
                     text=text.strip(),
+                    content=str(item.get("content") or ""),
                     chunk_file=str(chunks_path.resolve()),
                     asset_ids=tuple(
                         value
@@ -253,12 +260,21 @@ class SearchIndex:
         *,
         k1: float = 1.5,
         b: float = 0.75,
+        use_search_representation: bool = True,
     ) -> None:
         self.chunks = chunks
         self.k1 = k1
         self.b = b
+        self.use_search_representation = use_search_representation
         self._stemmer = snowballstemmer.stemmer("russian")
-        self._tokens = [self._normalize(chunk.text) for chunk in chunks]
+        self._tokens = [
+            self._normalize(
+                search_representation(chunk)
+                if use_search_representation
+                else chunk.text
+            )
+            for chunk in chunks
+        ]
         self._term_freqs = [Counter(tokens) for tokens in self._tokens]
         self._doc_lengths = [len(tokens) for tokens in self._tokens]
         self._avg_length = (
@@ -310,7 +326,11 @@ class SearchIndex:
         top_k: int = 4,
         min_score: float = 0.0,
     ) -> list[tuple[float, Chunk]]:
-        terms = self._normalize(query)
+        terms = self._normalize(
+            query_representation(query)
+            if self.use_search_representation
+            else query
+        )
         if not terms or not self.chunks or self._avg_length == 0:
             return []
 
@@ -336,6 +356,12 @@ class SearchIndex:
                     * (self.k1 + 1)
                     / denominator
                 )
+            if (
+                self.use_search_representation
+                and is_navigation(self.chunks[index])
+                and not re.search(r"оглавлен|содержани|contents", query, re.I)
+            ):
+                score *= 0.15
             if score > 0:
                 scored.append((score, self.chunks[index]))
 
