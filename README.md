@@ -90,7 +90,7 @@ images.
 | `ANSWER_MAX_COMPLETION_TOKENS` | `1400` | Combined thinking + answer token budget |
 | `ANSWER_MAX_TOKENS` | `600` | Answer generation limit |
 | `TEMPERATURE` | `0.1` | Answer generation temperature |
-| `TOP_K` | `6` | Number of chunks passed to the LLM |
+| `TOP_K` | `2` | Initial retrieval seeds before bounded context expansion |
 | `MIN_SCORE` | `0` | Minimum BM25 score |
 | `KNOWLEDGE_DIR` | `data/knowledge` | Source PDF directory used for ingest and startup checks |
 | `DOCUMENTS_DIR` | `data/processed/documents` | Versioned `app/rag` store |
@@ -273,19 +273,20 @@ SQLite/PostgreSQL
 
 ### Retrieval behavior
 
-- `TOP_K` defaults to `6`, so several text and visual chunks reach the LLM.
-- Table-of-contents chunks are skipped for normal questions; they are used only
-  when the query asks for contents, sections or structure.
-- Diagram/image/screenshot chunks get a small BM25 boost for their title and
-  document name, because long visual chunks are otherwise penalised by length.
-- Visual queries such as “схема”, “диаграмма”, “рисунок”, “процесс” or “шаги”
-  always receive the best matching visual chunks, even if BM25 ranks several
-  text chunks above them.
+- `TOP_K` defaults to `2` initial seeds, matching `fix/visual-rag-evidence`.
+- BM25 uses the same search-only lexical hints as that branch. Evidence text
+  is unchanged; titles and document names are not repeated to inflate scores.
+- Table-of-contents chunks receive a score penalty for normal questions.
+  Useful prose under a contents heading remains searchable.
+- `SearchIndex.search` returns at most `top_k` matches; it does not append
+  visual fragments outside that limit.
 - The answer prompt explicitly tells the LLM to use diagram nodes/edges and
   table rows/columns when present.
 - Context expansion (`app/rag/retrieve.py`) adds related chunks from the same
   document/version up to a bounded limit (6 chunks / 12,000 characters) and
   never truncates a chunk to fit.
+- Schedule/contact questions use at most two seeds, even with a larger
+  `TOP_K` override, so focused answers keep a small context.
 - Offline diagnostics: `python -m app.rag.inspect` and
   `python -m app.rag.evaluate` (see `docs/visual-rag-plan.md`).
 

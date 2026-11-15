@@ -21,21 +21,6 @@ from app.rag.representation import (
 TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
 logger = logging.getLogger(__name__)
 
-VISUAL_TYPES = {"diagram", "image", "screenshot", "form"}
-VISUAL_QUERY_TERMS = (
-    "схем",
-    "диаграм",
-    "рисун",
-    "изображ",
-    "картин",
-    "блок-схем",
-    "процесс",
-    "шаг",
-    "стрелк",
-    "ветк",
-)
-TOC_QUERY_TERMS = ("содерж", "оглавлен", "раздел", "структур", "contents")
-
 
 @dataclass(frozen=True)
 class Chunk:
@@ -65,36 +50,6 @@ class Chunk:
 
 def tokenize(text: str) -> list[str]:
     return TOKEN_RE.findall(text.lower())
-
-
-def _is_toc(chunk: Chunk) -> bool:
-    """Detect table-of-contents chunks, which match almost every query."""
-    title = chunk.title.strip().lower()
-    if title in {"table of contents", "содержание", "1 содержание"}:
-        return True
-    return ".........." in chunk.text
-
-
-def _index_text(chunk: Chunk, use_search_representation: bool = True) -> str:
-    """Text used only for BM25, not for the LLM context.
-
-    Search-only representations add visual hints and translations. Visual
-    chunks are long and BM25 penalises them by length, so their title and
-    document name are repeated as well.
-    """
-    base = (
-        search_representation(chunk)
-        if use_search_representation
-        else chunk.text
-    )
-    base = f"{chunk.document}\n{base}"
-    if chunk.chunk_type in VISUAL_TYPES:
-        return (
-            f"{chunk.title}\n" * 3
-            + f"{chunk.document}\n" * 2
-            + base
-        )
-    return base
 
 
 def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
@@ -258,7 +213,6 @@ def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
     return chunks
 
 
-
 class SearchIndex:
     """Okapi BM25 over preprocessed Docling/Vision chunks."""
 
@@ -276,10 +230,13 @@ class SearchIndex:
         self.use_search_representation = use_search_representation
         self._stemmer = snowballstemmer.stemmer("russian")
         self._tokens = [
-            self._normalize(_index_text(chunk, use_search_representation))
+            self._normalize(
+                search_representation(chunk)
+                if use_search_representation
+                else chunk.text
+            )
             for chunk in chunks
         ]
-        self._toc = [_is_toc(chunk) for chunk in chunks]
         self._term_freqs = [Counter(tokens) for tokens in self._tokens]
         self._doc_lengths = [len(tokens) for tokens in self._tokens]
         self._avg_length = (
@@ -343,16 +300,8 @@ class SearchIndex:
         if not expanded_terms:
             return []
 
-        query_lower = query.lower()
-        wants_toc = any(term in query_lower for term in TOC_QUERY_TERMS)
-        wants_visual = any(
-            term in query_lower for term in VISUAL_QUERY_TERMS
-        )
-
         scored: list[tuple[float, Chunk]] = []
         for index, frequencies in enumerate(self._term_freqs):
-            if self._toc[index] and not wants_toc:
-                continue
             length = self._doc_lengths[index]
             score = 0.0
             for term, weight in expanded_terms:
@@ -382,16 +331,4 @@ class SearchIndex:
         if min_score and scored and scored[0][0] < min_score:
             return []
 
-        results = scored[:top_k]
-        if wants_visual:
-            # BM25 often ranks a long diagram below short text chunks. Make
-            # sure visual evidence reaches the answering model.
-            selected_ids = {chunk.chunk_id for _score, chunk in results}
-            visual = [
-                item
-                for item in scored
-                if item[1].chunk_type in VISUAL_TYPES
-                and item[1].chunk_id not in selected_ids
-            ]
-            results = results + visual[:2]
-        return results
+        return scored[:top_k]

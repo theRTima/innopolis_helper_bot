@@ -43,6 +43,18 @@ def test_contents_heading_does_not_hide_actual_instructions():
         title="1 Содержание",
     )
     assert not is_navigation(source)
+    results = SearchIndex([source]).search("График офис-менеджера")
+    assert results[0][1] == source
+
+
+def test_visual_search_respects_requested_result_limit():
+    sources = [
+        chunk("a", "Схема согласования заявки", "diagram"),
+        chunk("b", "Схема согласования заявки", "diagram"),
+        chunk("c", "Схема согласования заявки", "image"),
+    ]
+    results = SearchIndex(sources).search("Схема заявки", top_k=1)
+    assert len(results) == 1
 
 
 def test_visual_translation_is_search_only():

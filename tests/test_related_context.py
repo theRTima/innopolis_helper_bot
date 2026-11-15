@@ -56,6 +56,15 @@ def test_focused_question_does_not_expand_and_duplicates_removed():
     assert len(retrieve_context(duplicate, "Шаги")) == 2
 
 
+def test_focused_question_remains_small_with_larger_top_k():
+    results = [(10, c(str(i), 3)) for i in range(8)]
+    assert (
+        retrieve_context(Index(results), "График работы?", top_k=6)
+        == results[:2]
+    )
+    assert len(retrieve_context(Index(results), "Опиши шаги", top_k=6)) == 6
+
+
 def test_empty_and_invalid_limits():
     assert retrieve_context(Index([]), "Шаги") == []
     with pytest.raises(ValueError):

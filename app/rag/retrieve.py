@@ -19,12 +19,13 @@ def retrieve_context(
     ranked = index.search(query, top_k=max(top_k, 12), min_score=min_score)
     if not ranked:
         return []
-    seeds = ranked[:top_k]
     # Precise schedule/contact/number lookups do not need a process overview.
     focused = bool(
         re.search(r"график|телефон|расписани|во сколько", query, re.I)
     )
-    limit = min(max_chunks, top_k) if focused else max_chunks
+    seed_count = min(top_k, 2) if focused else top_k
+    seeds = ranked[:seed_count]
+    limit = min(max_chunks, seed_count) if focused else max_chunks
     selected = []
     seen = set()
 
@@ -51,7 +52,7 @@ def retrieve_context(
         seeds[0][1].version_id,
         seeds[0][1].chunk_file,
     )
-    for rank, result in enumerate(ranked[top_k:], top_k + 1):
+    for rank, result in enumerate(ranked[seed_count:], seed_count + 1):
         score, chunk = result
         if (
             chunk.document_id or chunk.document,
@@ -65,7 +66,7 @@ def retrieve_context(
             r"картин|изображ|значок|иконк|выгляд|скриншот", query, re.I
         ):
             continue
-        related = rank <= max(top_k, 4) or any(
+        related = rank <= max(seed_count, 4) or any(
             abs(chunk.page_from - seed.page_from) <= 1
             or (chunk.title == seed.title and chunk.title not in {"", "Важно"})
             for _, seed in seeds
