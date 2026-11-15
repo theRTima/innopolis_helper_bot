@@ -33,6 +33,7 @@ class CleanAdminSite(AdminSite):
 
     async def _get_page_as_app(self, request: Request):
         app = await super()._get_page_as_app(request)
+        app.logo = None
         app.header = None
         app.footer = None
         return app
