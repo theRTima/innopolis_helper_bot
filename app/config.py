@@ -35,12 +35,18 @@ class Settings:
     documents_base_url: str
     document_link_secret: str
     llm_enable_thinking: bool | None = None
+    llm_thinking_budget: int | None = None
+    answer_max_completion_tokens: int = 1400
 
     @classmethod
     def from_env(cls) -> "Settings":
         thinking = os.getenv("LLM_ENABLE_THINKING", "auto").lower().strip()
         if thinking not in {"auto", "true", "false"}:
             raise ValueError("LLM_ENABLE_THINKING must be auto, true or false")
+        budget_text = os.getenv("LLM_THINKING_BUDGET", "").strip()
+        budget = int(budget_text) if budget_text else None
+        if budget is not None and not 1 <= budget <= 4096:
+            raise ValueError("LLM_THINKING_BUDGET must be from 1 to 4096")
         return cls(
             bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             llm_base_url=os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1"),
@@ -66,6 +72,10 @@ class Settings:
             llm_enable_thinking={"auto": None, "true": True, "false": False}[
                 thinking
             ],
+            llm_thinking_budget=budget,
+            answer_max_completion_tokens=int(
+                os.getenv("ANSWER_MAX_COMPLETION_TOKENS", "1400")
+            ),
         )
 
     def validate(self) -> None:

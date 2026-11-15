@@ -98,6 +98,8 @@ async def run() -> int:
         max_tokens=settings.answer_max_tokens,
         temperature=settings.temperature,
         enable_thinking=settings.llm_enable_thinking,
+        thinking_budget=settings.llm_thinking_budget,
+        max_completion_tokens=settings.answer_max_completion_tokens,
     )
 
     bot = Bot(

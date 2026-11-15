@@ -8,7 +8,7 @@ from openai import AsyncOpenAI
 
 from app.rag.index import Chunk
 from app.rag.context import format_context as _format_context
-from app.llm.policy import thinking_options
+from app.llm.policy import completion_options
 
 SYSTEM_PROMPT = (
     "Ты корпоративный помощник первой линии поддержки. Отвечай по-русски "
@@ -53,6 +53,8 @@ class LLMClient:
         max_tokens: int,
         temperature: float,
         enable_thinking: bool | None = None,
+        thinking_budget: int | None = None,
+        max_completion_tokens: int = 1400,
     ) -> None:
         self._client = AsyncOpenAI(
             base_url=base_url,
@@ -67,7 +69,14 @@ class LLMClient:
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
-        self._extra_body = thinking_options(base_url, model, enable_thinking)
+        self._completion_options = completion_options(
+            base_url,
+            model,
+            max_tokens,
+            enable_thinking,
+            thinking_budget,
+            max_completion_tokens,
+        )
 
     async def answer_question(
         self,
@@ -86,8 +95,10 @@ class LLMClient:
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=self._temperature,
-                max_tokens=self._max_tokens,
-                extra_body=self._extra_body or None,
+                **self._completion_options,
             )
         message = response.choices[0].message
-        return (message.content or "Не удалось сформировать ответ.").strip()
+        answer = (message.content or "Не удалось сформировать ответ.").strip()
+        if getattr(response.choices[0], "finish_reason", None) == "length":
+            answer += "\n\nОтвет ограничен лимитом и может быть неполным."
+        return answer

@@ -1,10 +1,11 @@
-from app.llm.policy import thinking_options
+from app.llm.policy import thinking_options, completion_options
+import pytest
 
 
 def test_thinking_default_is_provider_and_model_scoped():
     assert thinking_options(
         "https://opencode.ai/zen/go/v1", "qwen3.8-flash"
-    ) == {"enable_thinking": False}
+    ) == {"enable_thinking": True, "thinking_budget": 512}
     assert thinking_options("https://example.com/v1", "qwen3.8-flash") == {}
     assert thinking_options("https://opencode.ai/zen/go/v1", "other") == {}
     assert (
@@ -18,7 +19,34 @@ def test_thinking_default_is_provider_and_model_scoped():
 def test_explicit_override():
     assert thinking_options(
         "https://opencode.ai/zen/go/v1", "qwen3.8-flash", True
-    ) == {"enable_thinking": True}
+    ) == {"enable_thinking": True, "thinking_budget": 512}
+    assert thinking_options(
+        "https://opencode.ai/zen/go/v1", "qwen3.8-flash", False
+    ) == {"enable_thinking": False}
+
+
+def test_combined_limit_and_budget_validation():
+    result = completion_options(
+        "https://opencode.ai/zen/go/v1", "qwen3.8-flash", 900
+    )
+    assert result["max_completion_tokens"] == 1400
+    assert "max_tokens" not in result
+    for budget in (0, -1, True, 4097):
+        with pytest.raises(ValueError):
+            thinking_options(
+                "https://opencode.ai/zen/go/v1", "qwen3.8-flash", True, budget
+            )
+    with pytest.raises(ValueError):
+        completion_options(
+            "https://opencode.ai/zen/go/v1",
+            "qwen3.8-flash",
+            900,
+            total_tokens=512,
+        )
+    assert completion_options("https://example.com/v1", "other", 600) == {
+        "extra_body": None,
+        "max_tokens": 600,
+    }
 
 
 def test_real_client_payload_and_no_reasoning_leak(monkeypatch):
@@ -64,4 +92,9 @@ def test_real_client_payload_and_no_reasoning_leak(monkeypatch):
     assert "PRIVATE" not in answer
     assert captured["init"]["timeout"] == 20
     assert captured["init"]["max_retries"] == 0
-    assert captured["request"]["extra_body"] == {"enable_thinking": False}
+    assert captured["request"]["extra_body"] == {
+        "enable_thinking": True,
+        "thinking_budget": 512,
+    }
+    assert captured["request"]["max_completion_tokens"] == 1400
+    assert "max_tokens" not in captured["request"]
