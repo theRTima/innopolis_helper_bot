@@ -43,6 +43,8 @@ def test_text_extraction_writes_manifest_and_caches(tmp_path):
     assert manifest["status"] == "ready"
     assert manifest["document_id"] == "notes"
     assert manifest["chunk_count"] == 1
+    assert first["stats"]["model_calls"] == 0
+    assert manifest["model_stats"]["model_calls"] == 0
 
     chunk_dir = Path(first["chunk_path"])
     assert (chunk_dir / "chunks.jsonl").is_file()

@@ -17,13 +17,17 @@ document facts.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from collections import defaultdict
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 from pathlib import Path
 
 import pymupdf
 from docling.document_converter import DocumentConverter
+from PIL import Image
 
 from app.rag.extraction import docling_parser as dp
 from app.rag.extraction import normalized as norm
@@ -34,6 +38,8 @@ from app.rag.extraction.quality import audit_analysis, should_fallback
 MAX_PROMPT_CHARS = 40_000
 MAX_BATCH_ELEMENTS = 30
 MAX_CANDIDATES = 25
+
+logger = logging.getLogger(__name__)
 
 
 def run_text(prompt: str) -> str:
@@ -337,6 +343,73 @@ def _image_path_for_picture(
     return dp.render_region(pdf_page, target, temp_dir, index), target
 
 
+def _parallel_map(
+    tasks: list[Callable[[], object]],
+    max_workers: int,
+    *,
+    on_complete: Callable[[], None] | None = None,
+) -> tuple[list[object], dict[int, Exception]]:
+    """Run independent tasks concurrently and preserve input order."""
+    results: list[object] = [None] * len(tasks)
+    errors: dict[int, Exception] = {}
+    if not tasks:
+        return results, errors
+    if max_workers <= 1 or len(tasks) == 1:
+        for index, task in enumerate(tasks):
+            try:
+                results[index] = task()
+            except Exception as error:
+                errors[index] = error
+            if on_complete is not None:
+                on_complete()
+        return results, errors
+
+    with ThreadPoolExecutor(
+        max_workers=min(max_workers, len(tasks))
+    ) as pool:
+        futures = {
+            pool.submit(task): index for index, task in enumerate(tasks)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                results[index] = future.result()
+            except Exception as error:
+                errors[index] = error
+            if on_complete is not None:
+                on_complete()
+    return results, errors
+
+
+def _vision_workers() -> int:
+    return max(1, vp.SETTINGS.extraction_vision_concurrency)
+
+
+def _text_workers() -> int:
+    return max(1, vp.SETTINGS.extraction_text_concurrency)
+
+
+def _picture_too_small(image_path: Path) -> bool:
+    minimum = vp.SETTINGS.extraction_min_image_pixels
+    if minimum <= 0:
+        return False
+    try:
+        with Image.open(image_path) as image:
+            width, height = image.size
+    except Exception:
+        return False
+    return width * height < minimum
+
+
+def _analysis_is_empty(analysis) -> bool:
+    """A valid ``empty`` result is not a failed visual extraction."""
+    return (
+        isinstance(analysis, dict)
+        and analysis.get("status") == "empty"
+        and not analysis.get("items")
+    )
+
+
 def build_from_pdf(
     pdf_path: Path,
     *,
@@ -505,6 +578,14 @@ def build_from_pdf(
         processed_units = 0
         if progress is not None:
             progress("image analysis", 0, total_units)
+
+        def mark_processed() -> None:
+            nonlocal processed_units
+            processed_units += 1
+            if progress is not None:
+                progress("image analysis", processed_units, total_units)
+
+        region_jobs: list[dict] = []
         for index, picture_data in enumerate(pictures):
             page_no = picture_data["page"]
             pdf_page = pdf_doc.load_page(page_no - 1)
@@ -518,56 +599,84 @@ def build_from_pdf(
                 seen_rects,
             )
             if image_path is None:
-                processed_units += 1
-                if progress is not None:
-                    progress("image analysis", processed_units, total_units)
+                mark_processed()
+                continue
+            if _picture_too_small(image_path):
+                logger.debug(
+                    "page %s: skipping tiny picture %s",
+                    page_no,
+                    image_path.name,
+                )
+                mark_processed()
                 continue
             asset_id = f"asset-{page_no}-{index}"
+            bbox = (
+                [target.x0, target.y0, target.x1, target.y1]
+                if target is not None
+                else None
+            )
             register_asset(
                 nd.assets,
                 asset_id,
                 image_path,
                 temp_dir,
                 page_no,
-                (
-                    [target.x0, target.y0, target.x1, target.y1]
-                    if target is not None
-                    else None
-                ),
+                bbox,
             )
-            analysis, raw = analyze_image(
-                image_path,
-                region_id=f"{document_id}:{page_no}:{index}",
+            region_jobs.append(
+                {
+                    "page": page_no,
+                    "asset_id": asset_id,
+                    "image_path": image_path,
+                    "section_path": picture_data["section_path"],
+                    "parent_id": picture_data["parent_id"],
+                    "bbox": bbox,
+                    "region_id": f"{document_id}:{page_no}:{index}",
+                    "page_text": pdf_page.get_text("text").strip()[:4000],
+                    "candidates": candidates_by_page.get(page_no, [])[
+                        :MAX_CANDIDATES
+                    ],
+                }
+            )
+
+        region_tasks = [
+            partial(
+                analyze_image,
+                job["image_path"],
+                region_id=job["region_id"],
                 mode="region",
-                page_text=pdf_page.get_text("text").strip()[:4000],
-                candidates=candidates_by_page.get(page_no, [])[
-                    :MAX_CANDIDATES
-                ],
+                page_text=job["page_text"],
+                candidates=job["candidates"],
             )
+            for job in region_jobs
+        ]
+        results, errors = _parallel_map(
+            region_tasks,
+            _vision_workers(),
+            on_complete=mark_processed,
+        )
+        for index, job in enumerate(region_jobs):
+            if index in errors:
+                raise errors[index]
+            analysis, raw = results[index]
             added = _add_analysis_items(
                 nd,
                 analysis,
-                page=page_no,
-                section_path=picture_data["section_path"],
-                parent_section_id=picture_data["parent_id"],
-                asset_id=asset_id,
+                page=job["page"],
+                section_path=job["section_path"],
+                parent_section_id=job["parent_id"],
+                asset_id=job["asset_id"],
                 raw_response=raw,
-                bbox=(
-                    [target.x0, target.y0, target.x1, target.y1]
-                    if target
-                    else None
-                ),
+                bbox=job["bbox"],
             )
-            if not added:
-                failed_pages.add(page_no)
+            if not added and not _analysis_is_empty(analysis):
+                failed_pages.add(job["page"])
                 warnings.append(
-                    f"page {page_no}: picture analysis produced no items; "
+                    f"page {job['page']}: picture analysis produced no items; "
                     f"raw={raw[:200]!r}"
                 )
-            processed_units += 1
-            if progress is not None:
-                progress("image analysis", processed_units, total_units)
 
+        fallback_jobs: list[dict] = []
         for page in sorted(selected):
             if not should_fallback(
                 failed_visual=page in failed_pages,
@@ -578,6 +687,7 @@ def build_from_pdf(
                 ),
                 min_page_text=dp.MIN_PAGE_TEXT,
             ):
+                mark_processed()
                 continue
             pdf_page = pdf_doc.load_page(page - 1)
             image_path = temp_dir / f"page_{page:03d}_vision.png"
@@ -585,33 +695,58 @@ def build_from_pdf(
             register_asset(
                 nd.assets, f"asset-{page}-page", image_path, temp_dir, page
             )
-            analysis, raw = analyze_image(
-                image_path,
-                region_id=f"{document_id}:{page}:page",
-                mode="page",
-                page_text=pdf_page.get_text("text").strip()[:4000],
-                candidates=candidates_by_page.get(page, [])[:MAX_CANDIDATES],
+            fallback_jobs.append(
+                {
+                    "page": page,
+                    "image_path": image_path,
+                    "asset_id": f"asset-{page}-page",
+                    "section_path": page_context.get(page, ("", 0))[0],
+                    "region_id": f"{document_id}:{page}:page",
+                    "page_text": pdf_page.get_text("text").strip()[:4000],
+                    "candidates": candidates_by_page.get(page, [])[
+                        :MAX_CANDIDATES
+                    ],
+                    "fallback_text": vp.clean_content(
+                        pdf_page.get_text("text").strip()
+                    ),
+                }
             )
+
+        fallback_tasks = [
+            partial(
+                analyze_image,
+                job["image_path"],
+                region_id=job["region_id"],
+                mode="page",
+                page_text=job["page_text"],
+                candidates=job["candidates"],
+            )
+            for job in fallback_jobs
+        ]
+        results, errors = _parallel_map(
+            fallback_tasks,
+            _vision_workers(),
+            on_complete=mark_processed,
+        )
+        for index, job in enumerate(fallback_jobs):
+            if index in errors:
+                raise errors[index]
+            analysis, raw = results[index]
             added = _add_analysis_items(
                 nd,
                 analysis,
-                page=page,
-                section_path=page_context.get(page, ("", 0))[0],
+                page=job["page"],
+                section_path=job["section_path"],
                 parent_section_id=None,
-                asset_id=f"asset-{page}-page",
+                asset_id=job["asset_id"],
                 raw_response=raw,
                 bbox=None,
-                fallback_text=vp.clean_content(
-                    pdf_page.get_text("text").strip()
-                ),
+                fallback_text=job["fallback_text"],
             )
             if not added:
                 warnings.append(
-                    f"page {page}: vision fallback produced no items"
+                    f"page {job['page']}: vision fallback produced no items"
                 )
-            processed_units += 1
-            if progress is not None:
-                progress("image analysis", processed_units, total_units)
     finally:
         pdf_doc.close()
 
@@ -690,40 +825,53 @@ def chunk_elements(
     if progress is not None:
         progress("chunking", 0, total_batches)
 
-    for batches in page_batches:
-        for batch in batches:
-            prompt = vp.normalized_chunker_prompt.render(
-                document_id=document_id,
-                version_id=version_id,
-                target_tokens=target_tokens,
-                normalized_elements=batch,
+    prompts = [
+        vp.normalized_chunker_prompt.render(
+            document_id=document_id,
+            version_id=version_id,
+            target_tokens=target_tokens,
+            normalized_elements=batch,
+        )
+        for batches in page_batches
+        for batch in batches
+    ]
+
+    def mark_batch() -> None:
+        nonlocal processed_batches
+        processed_batches += 1
+        if progress is not None:
+            progress("chunking", processed_batches, total_batches)
+
+    tasks = [partial(run_text, prompt) for prompt in prompts]
+    results, errors = _parallel_map(
+        tasks, _text_workers(), on_complete=mark_batch
+    )
+
+    for index, raw in enumerate(results):
+        if index in errors:
+            raise errors[index]
+        parsed = vp.parse_json_object(raw)
+        chunks = parsed.get("chunks")
+        if isinstance(chunks, list):
+            raw_chunks.extend(
+                chunk for chunk in chunks if isinstance(chunk, dict)
             )
-            raw = run_text(prompt)
-            parsed = vp.parse_json_object(raw)
-            chunks = parsed.get("chunks")
-            if isinstance(chunks, list):
-                raw_chunks.extend(
-                    chunk for chunk in chunks if isinstance(chunk, dict)
+        else:
+            warnings.append("chunker returned no JSON chunks array")
+        for excluded in parsed.get("excluded_sources") or []:
+            if isinstance(excluded, dict):
+                warnings.append(
+                    "chunker excluded source "
+                    f"{excluded.get('source_reference_id')}: "
+                    f"{excluded.get('reason', '')}"
                 )
-            else:
-                warnings.append("chunker returned no JSON chunks array")
-            for excluded in parsed.get("excluded_sources") or []:
-                if isinstance(excluded, dict):
-                    warnings.append(
-                        "chunker excluded source "
-                        f"{excluded.get('source_reference_id')}: "
-                        f"{excluded.get('reason', '')}"
-                    )
-            for unresolved in parsed.get("unresolved") or []:
-                if isinstance(unresolved, dict):
-                    warnings.append(
-                        "chunker unresolved "
-                        f"{unresolved.get('source_reference_id')}: "
-                        f"{unresolved.get('issue', '')}"
-                    )
-            processed_batches += 1
-            if progress is not None:
-                progress("chunking", processed_batches, total_batches)
+        for unresolved in parsed.get("unresolved") or []:
+            if isinstance(unresolved, dict):
+                warnings.append(
+                    "chunker unresolved "
+                    f"{unresolved.get('source_reference_id')}: "
+                    f"{unresolved.get('issue', '')}"
+                )
     return raw_chunks, warnings
 
 

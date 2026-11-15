@@ -131,6 +131,16 @@ def test_extraction_publishes_images_and_checks_cache(tmp_path, monkeypatch):
 
     fake = types.ModuleType("app.rag.extraction.new_pipeline")
     vision = types.ModuleType("app.rag.extraction.vision_parser")
+    vision.reset_stats = lambda: None
+    vision.get_stats = lambda: {
+        "vision_calls": 0,
+        "text_calls": 0,
+        "cache_hits": 0,
+        "failures": 0,
+        "vision_ms": 0,
+        "text_ms": 0,
+        "model_calls": 0,
+    }
 
     def build(image_path, **kwargs):
         import shutil

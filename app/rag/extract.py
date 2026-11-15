@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import logging
 import shutil
 import sys
 import tempfile
@@ -31,6 +32,8 @@ PIPELINE_VERSION = 3
 MAX_TOKENS_TARGET = 600
 SUPPORTED_FORMATS = {"pdf", "docx", "xlsx", "pptx", "image", "text"}
 OFFICE_FORMATS = {"docx", "xlsx", "pptx"}
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractionError(Exception):
@@ -241,6 +244,7 @@ def extract_version(
 
         chunks: list[dict] = []
         warnings: list[str] = []
+        vp.reset_stats()
         with tempfile.TemporaryDirectory(
             prefix=".staging-", dir=chunk_root
         ) as tmp:
@@ -407,16 +411,29 @@ def extract_version(
                 if file_format != "text"
                 else chunk_manifest["quality"]
             )
+            stats = vp.get_stats()
+            chunk_manifest["model_stats"] = stats
             (stage / "chunk_manifest.json").write_text(
                 json.dumps(chunk_manifest, ensure_ascii=False, indent=2)
                 + "\n",
                 encoding="utf-8",
             )
             stage.rename(destination)
+            logger.info(
+                "Extraction model stats: vision_calls=%d text_calls=%d "
+                "cache_hits=%d failures=%d vision_ms=%d text_ms=%d",
+                stats["vision_calls"],
+                stats["text_calls"],
+                stats["cache_hits"],
+                stats["failures"],
+                stats["vision_ms"],
+                stats["text_ms"],
+            )
             return {
                 "cached": False,
                 "chunk_path": str(destination),
                 "manifest": chunk_manifest,
+                "stats": stats,
             }
     finally:
         lock.unlink(missing_ok=True)

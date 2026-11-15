@@ -96,6 +96,18 @@ async def save_success(sessions, job_id: int, title: str, result: tuple) -> None
     ingested, _rendered, extracted, timings = result
     source_manifest = ingested["manifest"]
     chunk_manifest = extracted["manifest"]
+    stats = extracted.get("stats") or {}
+    is_text = source_manifest["format"] == "text"
+    model_calls = int(stats.get("model_calls", 0))
+    cache_hits = int(stats.get("cache_hits", 0))
+    if extracted.get("cached"):
+        cache_hits = max(1, cache_hits)
+    text_ms = (
+        timings["extract_ms"]
+        if is_text
+        else int(stats.get("text_ms", 0))
+    )
+    vision_ms = 0 if is_text else int(stats.get("vision_ms", 0))
     async with sessions() as session, session.begin():
         job = await session.get(DocumentImportJob, job_id)
         document = await session.scalar(
@@ -144,9 +156,11 @@ async def save_success(sessions, job_id: int, title: str, result: tuple) -> None
                 parser="docling+vision",
                 imported=True,
                 chunk_count=chunk_manifest["chunk_count"],
+                model_calls=model_calls,
+                cache_hits=cache_hits,
                 parse_ms=timings["extract_ms"],
-                text_ms=(timings["extract_ms"] if source_manifest["format"] == "text" else 0),
-                vision_ms=(timings["extract_ms"] if source_manifest["format"] != "text" else 0),
+                text_ms=text_ms,
+                vision_ms=vision_ms,
                 total_ms=timings["total_ms"],
             )
         )

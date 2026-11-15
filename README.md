@@ -242,7 +242,9 @@ docker compose logs -f admin
 
 The worker processes **one document at a time**. Large files can take a long
 time, and later uploads remain `queued` until the current job finishes. This is
-normal.
+normal. Within the current document, independent picture regions and page
+fallbacks are analyzed concurrently according to
+`EXTRACTION_VISION_CONCURRENCY`.
 
 If a file matches an existing checksum, it is not processed. The queue records
 a completed entry whose stage is `file already exists`, and the form reports:
@@ -549,6 +551,20 @@ The model must support **image input** for document extraction. A text-only
 model can answer questions from existing chunks but cannot process new PDFs or
 images.
 
+Extraction analyses independent picture regions and page fallbacks in parallel.
+The defaults (`EXTRACTION_VISION_CONCURRENCY=2`) are safe for most remote
+providers. Increase them only after checking the provider's rate limits; set
+the value to `1` if requests are throttled or if a local llama.cpp server is
+configured with a single slot. A local server needs matching `--parallel`
+capacity and a large enough context. Text grouping uses a separate limit
+(`EXTRACTION_TEXT_CONCURRENCY=4`).
+
+Raw vision and chunk-grouping responses are cached per request, so retries and
+reruns after a partial failure reuse already completed calls. The cache is
+invalidated automatically when the model, prompt, or reasoning settings change.
+Successful whole-document extractions are still served by the versioned chunk
+cache.
+
 ### Environment variables
 
 | Variable | Default | Purpose |
@@ -565,6 +581,12 @@ images.
 | `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Client identification |
 | `LLM_ANSWER_REASONING_EFFORT` | `minimal` | Fallback reasoning effort for answers when thinking budget is not used |
 | `LLM_EXTRACTION_REASONING_EFFORT` | `low` | Reasoning effort for picture/page analysis and chunk grouping |
+| `EXTRACTION_VISION_CONCURRENCY` | `2` | Parallel picture/page vision requests per extraction |
+| `EXTRACTION_TEXT_CONCURRENCY` | `4` | Parallel chunk-grouping requests per extraction |
+| `EXTRACTION_REQUEST_TIMEOUT` | `180` | Per-request timeout for extraction model calls, seconds |
+| `EXTRACTION_MIN_IMAGE_PIXELS` | `1024` | Skip decorative pictures smaller than this; `0` disables |
+| `EXTRACTION_CACHE_ENABLED` | `true` | Cache raw extraction responses for retries and partial reruns |
+| `EXTRACTION_CACHE_DIR` | `~/.cache/innopolis-helper-bot/vision` | Raw response cache directory |
 | `LLM_ENABLE_THINKING` | `auto` | Bounded thinking for the tested OpenCode/qwen pair |
 | `LLM_THINKING_BUDGET` | provider default (`512`) | Maximum thinking tokens when enabled |
 | `ANSWER_MAX_COMPLETION_TOKENS` | `1400` | Combined thinking + answer token budget |
