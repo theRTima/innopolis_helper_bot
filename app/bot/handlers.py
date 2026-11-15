@@ -15,7 +15,7 @@ from app.anchors import Locator, LocatorKind, build_anchor_url
 from app.bot.keyboards import feedback_keyboard
 from app.bot.input_filter import GibberishMute, RateLimiter, SpamCooldown, valid_question
 from app.config import Settings
-from app.llm.client import LLMClient
+from app.llm.client import EMPTY_ANSWER_MESSAGE, LLMClient
 from app.rag.index import Chunk, SearchIndex
 from app.rag.retrieve import retrieve_context
 from app.storage.db import Database
@@ -174,7 +174,11 @@ async def handle_question(
     if results:
         try:
             answer = await llm.answer_question(question, results)
-            status = "unverified"
+            status = (
+                "unverified"
+                if answer and answer != EMPTY_ANSWER_MESSAGE
+                else "error"
+            )
         except Exception:
             logger.exception("LLM request failed")
             answer = LLM_ERROR_MESSAGE

@@ -23,7 +23,26 @@ class Question(Base):
     question: Mapped[str] = mapped_column(Text, nullable=False)
     answer: Mapped[str] = mapped_column(Text, nullable=False)
     sources: Mapped[str] = mapped_column(Text, nullable=False)
-    created_at: Mapped[str] = mapped_column(String, server_default=func.current_timestamp())
+    created_at: Mapped[str] = mapped_column(
+        String, server_default=func.current_timestamp(), index=True
+    )
+
+
+class QuestionAnalytics(Base):
+    """Optional analytics data for an existing question."""
+
+    __tablename__ = "question_analytics"
+
+    question_id: Mapped[int] = mapped_column(
+        ForeignKey("questions.id", ondelete="CASCADE"), primary_key=True
+    )
+    area: Mapped[str | None] = mapped_column(String(32))
+    kind: Mapped[str | None] = mapped_column(String(32))
+    issue: Mapped[str | None] = mapped_column(String(96))
+    classified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    escalation_status: Mapped[str | None] = mapped_column(String(16))
 
 
 class Feedback(Base):

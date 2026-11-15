@@ -453,6 +453,12 @@ Start the viewer:
 The viewer serves signed source links for PDF and Office documents. The viewer reads originals from `KNOWLEDGE_DIR`. Remote users need a reachable
 HTTPS URL, usually through a reverse proxy.
 
+## Support analytics
+
+The analytics dashboard groups related questions and shows recurring problems,
+answer outcomes, and changes between periods. A separate worker labels new
+questions without delaying Telegram replies. See [analytics setup](docs/analytics.md).
+
 ## Local administration preview
 
 The optional FastAPI-Amis-Admin application displays questions, documents and
