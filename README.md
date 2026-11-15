@@ -243,19 +243,20 @@ Build and start:
 
 ```bash
 docker compose build
+docker compose --profile ingest build
 docker compose up -d postgres bot viewer
 ```
 
 Run ingestion for one file:
 
 ```bash
-docker compose run --rm ingest
+docker compose --profile ingest run --rm ingest
 ```
 
 Or override the source and document ID:
 
 ```bash
-docker compose run --rm ingest \
+docker compose --profile ingest run --rm ingest \
   --source /app/data/knowledge/Реестр мебели.pdf \
   --document-id furniture
 ```
