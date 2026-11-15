@@ -95,10 +95,12 @@ without explicit user feedback have an unknown outcome. Re-run the setup script
 after upgrading the database to refresh the aggregate views.
 
 The bot rate-limits individual questions to one every three seconds. Eight
-messages from the same user within five seconds trigger a 30-second cooldown;
-after the first warning, further messages during the cooldown are logged but
-receive no reply. Limits are held in process memory, so they reset on restart
-and are not shared between bot instances.
+messages from the same user within five seconds trigger a 30-second cooldown.
+The rate-limit reply states the allowed interval and the remaining wait; the
+cooldown reply states the message limit, the time window and the cooldown.
+After the first cooldown warning, further messages during the cooldown are
+logged but receive no reply. Limits are held in process memory, so they reset
+on restart and are not shared between bot instances.
 
 The ingestion image includes LibreOffice. The Docker scanner currently discovers
 PDFs only; use the local pipeline below for other formats.
