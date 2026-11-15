@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from app.ingestion import normalized as norm
-from app.ingestion import vision_parser as vp
+from app.rag.extraction import normalized as norm
+from app.rag.extraction import vision_parser as vp
 
 
 def _nd_with_sources():

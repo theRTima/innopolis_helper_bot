@@ -7,7 +7,7 @@ This module implements the stage the new prompts were written for:
    ``prompts/image_analysis.j2``.
 3. Analysis items become normalized elements with stable source references.
 4. ``prompts/vision_chunker.j2`` groups those references into retrieval chunks.
-5. ``app.ingestion.normalized`` resolves references back to real text and data.
+5. ``app.rag.extraction.normalized`` resolves references back to real text and data.
 
 The model never copies source text into the final chunk.  It only returns
 references, so a malformed or incomplete model answer cannot silently rewrite
@@ -24,9 +24,9 @@ from pathlib import Path
 import pymupdf
 from docling.document_converter import DocumentConverter
 
-from app.ingestion import docling_parser as dp
-from app.ingestion import normalized as norm
-from app.ingestion import vision_parser as vp
+from app.rag.extraction import docling_parser as dp
+from app.rag.extraction import normalized as norm
+from app.rag.extraction import vision_parser as vp
 
 MAX_PROMPT_CHARS = 40_000
 MAX_BATCH_ELEMENTS = 30

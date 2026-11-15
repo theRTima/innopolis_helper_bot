@@ -135,14 +135,6 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
     return chunks
 
 
-def load_chunks(chunks_dir: Path) -> list[Chunk]:
-    """Load flat Docling/Vision JSONL chunks (legacy layout)."""
-    chunks: list[Chunk] = []
-    for chunks_path in sorted(chunks_dir.glob("*.chunks.jsonl")):
-        chunks.extend(_read_chunk_file(chunks_path))
-    return chunks
-
-
 def _latest_chunk_manifest(version_path: Path) -> Path | None:
     candidates: list[tuple[str, Path]] = []
     for manifest_path in version_path.glob("chunks/*/chunk_manifest.json"):
@@ -197,32 +189,6 @@ def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
     for _created, chunks_file in best.values():
         chunks.extend(_read_chunk_file(chunks_file))
     return chunks
-
-
-def load_chunks_auto(
-    chunks_dir: Path, documents_root: Path
-) -> tuple[list[Chunk], str]:
-    """Prefer the versioned store and fill in flat chunks for other documents."""
-    versioned = load_versioned_chunks(documents_root)
-    if not versioned:
-        return load_chunks(chunks_dir), "flat"
-
-    covered = {chunk.document for chunk in versioned}
-    additions = [
-        chunk for chunk in load_chunks(chunks_dir) if chunk.document not in covered
-    ]
-    if additions:
-        return versioned + additions, "mixed"
-    return versioned, "versioned"
-
-
-def chunk_source_mismatches(
-    chunks: list[Chunk], knowledge_dir: Path
-) -> tuple[list[str], list[str]]:
-    """Return PDFs without chunks and chunk sources without a matching PDF."""
-    pdf_sources = {path.stem for path in knowledge_dir.glob("*.pdf")}
-    chunk_sources = {chunk.document for chunk in chunks}
-    return sorted(pdf_sources - chunk_sources), sorted(chunk_sources - pdf_sources)
 
 
 class SearchIndex:

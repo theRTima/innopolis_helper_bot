@@ -13,11 +13,7 @@ from aiogram.exceptions import TelegramUnauthorizedError
 from app.bot.handlers import router
 from app.config import Settings
 from app.llm.client import LLMClient
-from app.rag.index import (
-    SearchIndex,
-    chunk_source_mismatches,
-    load_chunks_auto,
-)
+from app.rag.index import SearchIndex, load_versioned_chunks
 from app.storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -36,53 +32,29 @@ async def run() -> int:
         return 1
 
     logger.info(
-        "Загружаю фрагменты из %s (versioned: %s)",
-        settings.chunks_dir,
+        "Загружаю фрагменты из versioned store: %s",
         settings.documents_dir,
     )
-    chunks, source_mode = load_chunks_auto(
-        settings.chunks_dir, settings.documents_dir
-    )
+    chunks = load_versioned_chunks(settings.documents_dir)
     if not chunks:
         logger.error(
-            "Чанки не найдены. Выполните python -m app.ingestion "
-            "или полный app/rag: ingest -> render -> extract --all."
+            "Чанки не найдены. Выполните: "
+            "app.rag.ingest -> app.rag.render -> app.rag.extract --all."
         )
         return 1
 
-    if source_mode == "flat":
-        missing, stale = chunk_source_mismatches(
-            chunks, settings.knowledge_dir
+    pdf_sources = {
+        path.stem for path in settings.knowledge_dir.glob("*.pdf")
+    }
+    chunk_sources = {chunk.document for chunk in chunks}
+    missing = sorted(pdf_sources - chunk_sources)
+    if missing:
+        logger.warning(
+            "Не обработаны PDF и будут недоступны: %s. "
+            "Выполните ingest -> render -> extract.",
+            ", ".join(missing),
         )
-        if missing or stale:
-            details = []
-            recovery = []
-            if missing:
-                details.append(f"не обработаны PDF: {', '.join(missing)}")
-                recovery.append("сначала выполните: python -m app.ingestion")
-            if stale:
-                details.append(
-                    f"нет исходных PDF для чанков: {', '.join(stale)}"
-                )
-                recovery.append(
-                    f"удалите устаревшие *.chunks.jsonl из {settings.chunks_dir}"
-                )
-            logger.error("%s. %s", "; ".join(details), "; ".join(recovery))
-            return 1
-    else:
-        pdf_sources = {
-            path.stem for path in settings.knowledge_dir.glob("*.pdf")
-        }
-        chunk_sources = {chunk.document for chunk in chunks}
-        missing = sorted(pdf_sources - chunk_sources)
-        if missing:
-            logger.error(
-                "Не обработаны PDF: %s. Выполните app/rag "
-                "ingest -> render -> extract --all.",
-                ", ".join(missing),
-            )
-            return 1
-    logger.info("Загружено %d фрагментов (%s)", len(chunks), source_mode)
+    logger.info("Загружено %d фрагментов (versioned)", len(chunks))
     index = SearchIndex(chunks)
 
     database = Database(settings.database_url or settings.database_path)

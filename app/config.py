@@ -28,7 +28,6 @@ class Settings:
     top_k: int
     min_score: float
     knowledge_dir: Path
-    chunks_dir: Path
     documents_dir: Path
     database_path: Path
     database_url: str
@@ -57,7 +56,6 @@ class Settings:
             top_k=int(os.getenv("TOP_K", "6")),
             min_score=float(os.getenv("MIN_SCORE", "0")),
             knowledge_dir=_path("KNOWLEDGE_DIR", "data/knowledge"),
-            chunks_dir=_path("CHUNKS_DIR", "data/processed"),
             documents_dir=_path(
                 "DOCUMENTS_DIR", "data/processed/documents"
             ),

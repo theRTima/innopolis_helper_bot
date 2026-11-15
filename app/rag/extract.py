@@ -18,9 +18,9 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.ingestion import new_pipeline
-from app.ingestion import normalized as norm
-from app.ingestion import vision_parser as vp
+from app.rag.extraction import new_pipeline
+from app.rag.extraction import normalized as norm
+from app.rag.extraction import vision_parser as vp
 from app.rag.ingest import sha256_file
 from app.rag.render import RenderError
 

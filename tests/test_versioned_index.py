@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.rag.index import load_chunks_auto, load_versioned_chunks
+from app.rag.index import load_versioned_chunks
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -108,75 +108,3 @@ def test_versioned_loader_uses_latest_ready_version(tmp_path):
     assert chunks[0].document_id == "doc"
     assert chunks[0].version_id == "sha256-v2"
     assert chunks[0].locator == {"kind": "pdf-page", "value": 3}
-
-
-def test_auto_loader_falls_back_to_flat_chunks(tmp_path):
-    empty_documents = tmp_path / "documents"
-    empty_documents.mkdir()
-    flat = tmp_path / "flat"
-    flat.mkdir(parents=True)
-    (flat / "БП.chunks.jsonl").write_text(
-        json.dumps(
-            {
-                "id": "flat-1",
-                "source": "БП.pdf",
-                "page": 1,
-                "text": "old",
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    chunks, mode = load_chunks_auto(flat, empty_documents)
-    assert mode == "flat"
-    assert chunks[0].chunk_id == "flat-1"
-
-
-def test_auto_loader_mixes_versioned_and_flat_documents(tmp_path):
-    root = tmp_path / "documents"
-    _version(
-        root,
-        "travel",
-        "sha256-v2",
-        "2026-02-01T00:00:00+00:00",
-        [
-            _chunk("travel-1", source="БП Командировка.pdf"),
-        ],
-    )
-    flat = tmp_path / "flat"
-    flat.mkdir(parents=True)
-    (flat / "Другой.chunks.jsonl").write_text(
-        json.dumps(
-            {
-                "id": "flat-other",
-                "source": "Другой.pdf",
-                "page": 1,
-                "text": "other",
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    (flat / "БП Командировка.chunks.jsonl").write_text(
-        json.dumps(
-            {
-                "id": "flat-stale",
-                "source": "БП Командировка.pdf",
-                "page": 1,
-                "text": "stale",
-            },
-            ensure_ascii=False,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    chunks, mode = load_chunks_auto(flat, root)
-    assert mode == "mixed"
-    ids = {chunk.chunk_id for chunk in chunks}
-    assert "travel-1" in ids
-    assert "flat-other" in ids
-    assert "flat-stale" not in ids
