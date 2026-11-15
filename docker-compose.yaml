@@ -183,7 +183,7 @@ services:
       HOME: /cache
       XDG_CACHE_HOME: /cache
       HF_HOME: /cache/huggingface
-      DOCLING_ARTIFACTS_PATH: /cache/docling
+      DOCLING_CACHE_DIR: /cache/docling
     volumes:
       - ./data/knowledge:/app/data/knowledge:ro
       - ./data/processed:/app/data/processed
@@ -208,7 +208,7 @@ services:
       HOME: /cache
       XDG_CACHE_HOME: /cache
       HF_HOME: /cache/huggingface
-      DOCLING_ARTIFACTS_PATH: /cache/docling
+      DOCLING_CACHE_DIR: /cache/docling
     depends_on:
       postgres:
         condition: service_healthy

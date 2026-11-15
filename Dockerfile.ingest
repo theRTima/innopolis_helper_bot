@@ -69,7 +69,7 @@ RUN mkdir -p /cache \
 ENV HOME=/cache \
     XDG_CACHE_HOME=/cache \
     HF_HOME=/cache/huggingface \
-    DOCLING_ARTIFACTS_PATH=/cache/docling \
+    DOCLING_CACHE_DIR=/cache/docling \
     TMPDIR=/tmp
 
 USER app

@@ -85,6 +85,39 @@ docker compose --profile ingest build
 The ingestion image installs CPU-only PyTorch and LibreOffice, so the first
 build takes several minutes and downloads a large amount of data.
 
+Dependencies are installed before the application sources, so editing `app/`
+only rebuilds a small layer instead of reinstalling PyTorch/Docling. BuildKit
+keeps pip and apt caches on the host between builds.
+
+Docling and Hugging Face model downloads are stored in the `ingest_cache`
+Docker volume, so the first ingestion downloads them once and later runs reuse
+the local copy.
+
+**Docker disk maintenance.**
+
+```bash
+./scripts/docker_cleanup.sh
+```
+
+For a build that cleans up automatically afterwards, use
+`./scripts/docker_build.sh` (it runs the same `docker compose build` command
+and then the cleanup below).
+
+The cleanup script removes stopped one-shot containers, dangling images, unused
+networks and build cache older than 7 days. It never prunes named volumes, so
+the database, Grafana state and the Docling model cache are preserved. Tune the
+cache age with `BUILD_CACHE_TTL` and also drop unused images with `--images`:
+
+```bash
+BUILD_CACHE_TTL=720h ./scripts/docker_cleanup.sh
+./scripts/docker_cleanup.sh --images
+./scripts/docker_cleanup.sh --all-cache   # drop all build cache
+```
+
+For automatic cleanup, run it from a weekly cron/launchd job (or a systemd
+timer on a Linux host). Container logs are capped at 3 × 10 MB per service by
+`docker-compose.yaml`, so they cannot grow without bound.
+
 **5. Start PostgreSQL and apply migrations.**
 
 ```bash

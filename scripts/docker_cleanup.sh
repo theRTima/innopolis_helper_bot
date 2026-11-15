@@ -13,9 +13,14 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CACHE_TTL="${BUILD_CACHE_TTL:-168h}"
 PRUNE_IMAGES=0
-if [[ "${1:-}" == "--images" ]]; then
-    PRUNE_IMAGES=1
-fi
+PRUNE_ALL_CACHE=0
+for arg in "$@"; do
+    case "$arg" in
+        --images) PRUNE_IMAGES=1 ;;
+        --all-cache) PRUNE_ALL_CACHE=1 ;;
+        *) echo "Unknown option: $arg" >&2; exit 2 ;;
+    esac
+done
 
 echo "==> Docker usage before"
 docker system df
@@ -32,7 +37,11 @@ if [[ "$PRUNE_IMAGES" == "1" ]]; then
 fi
 
 echo "==> Removing build cache older than ${CACHE_TTL}"
-docker builder prune -f --filter "until=${CACHE_TTL}"
+if [[ "$PRUNE_ALL_CACHE" == "1" ]]; then
+    docker builder prune -a -f
+else
+    docker builder prune -f --filter "until=${CACHE_TTL}"
+fi
 
 echo "==> Removing unused networks"
 docker network prune -f
