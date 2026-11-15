@@ -92,6 +92,20 @@ html, body,
     color: #e2e8f0 !important;
     border-color: #334155 !important;
 }
+.cxd-Table-itemActions {
+    background: linear-gradient(
+        90deg,
+        rgba(30, 41, 59, 0) 0%,
+        #1e293b 20%,
+        #1e293b 100%
+    ) !important;
+}
+.cxd-Table-itemActions a {
+    color: #93c5fd !important;
+}
+.cxd-Table-itemActions .text-danger {
+    color: #f87171 !important;
+}
 .cxd-Table-heading,
 .cxd-Table-footer,
 .cxd-Table-foot {
