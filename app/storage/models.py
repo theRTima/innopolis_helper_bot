@@ -156,8 +156,22 @@ class Analitics(Base):
     question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), unique=True, nullable=False)
     answer_status: Mapped[str | None] = mapped_column(String(32))
     operator_status: Mapped[str | None] = mapped_column(String(32))
+    conversation_id: Mapped[int | None] = mapped_column(Integer)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivery_status: Mapped[str | None] = mapped_column(String(16))
+    resolution: Mapped[str | None] = mapped_column(String(16))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+
+
+class EscalationEvent(Base):
+    __tablename__ = "escalation_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
 
 
 class Citation(Base):

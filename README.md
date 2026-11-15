@@ -321,9 +321,18 @@ docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
 docker compose up -d grafana
 ```
 
-Log in as `admin` using `GRAFANA_ADMIN_PASSWORD`. This branch does not yet
-write answer and operator statuses to the `analytics` table; the dashboard
-shows existing records until that integration is added.
+Log in as `admin` using `GRAFANA_ADMIN_PASSWORD`. For escalation set
+`SUPPORT_URL` to an HTTPS or Telegram link. After four consecutive clarification
+requests the bot sends a button with that link; delivery indicates that Telegram
+accepted the button, not that a specialist received the request. Older records
+without explicit user feedback have an unknown outcome. Re-run the setup script
+after upgrading the database to refresh the aggregate views.
+
+The bot rate-limits individual questions to one every three seconds. Eight
+messages from the same user within five seconds trigger a 30-second cooldown;
+after the first warning, further messages during the cooldown are logged but
+receive no reply. Limits are held in process memory, so they reset on restart
+and are not shared between bot instances.
 
 Office ingestion works because `Dockerfile.ingest` installs LibreOffice by
 default; set `--build-arg INSTALL_OFFICE=0` to skip it.

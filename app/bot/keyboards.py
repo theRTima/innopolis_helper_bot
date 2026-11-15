@@ -26,4 +26,8 @@ def feedback_keyboard(
                 ),
             ]
         )
+        rows.append([
+            InlineKeyboardButton(text="Вопрос решён: да", callback_data=f"resolution:resolved:{question_id}"),
+            InlineKeyboardButton(text="Нет", callback_data=f"resolution:unresolved:{question_id}"),
+        ])
     return InlineKeyboardMarkup(inline_keyboard=rows)

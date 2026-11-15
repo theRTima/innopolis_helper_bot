@@ -38,6 +38,7 @@ class Settings:
     llm_enable_thinking: bool | None = None
     llm_thinking_budget: int | None = None
     answer_max_completion_tokens: int = 1400
+    support_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -84,6 +85,7 @@ class Settings:
             answer_max_completion_tokens=int(
                 os.getenv("ANSWER_MAX_COMPLETION_TOKENS", "1400")
             ),
+            support_url=os.getenv("SUPPORT_URL", "").strip(),
         )
 
     def validate(self) -> None:

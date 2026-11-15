@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app.anchors import Locator, LocatorKind, build_anchor_url
 from app.bot.keyboards import feedback_keyboard
+from app.bot.input_filter import RateLimiter, SpamCooldown, valid_question
 from app.config import Settings
 from app.llm.client import LLMClient
 from app.rag.index import Chunk, SearchIndex
@@ -21,6 +22,8 @@ from app.storage.db import Database
 logger = logging.getLogger(__name__)
 
 router = Router(name="main")
+rate_limiter = RateLimiter()
+spam_cooldown = SpamCooldown()
 
 FEEDBACK_MESSAGES = {
     "helpful": "Спасибо! Отметил ответ как полезный.",
@@ -97,29 +100,59 @@ async def handle_question(
     settings: Settings,
 ) -> None:
     question = (message.text or "").strip()
-    if len(question) < 2:
-        await message.answer("Напишите вопрос текстом, пожалуйста.")
-        return
     if message.from_user is None:
         return
 
-    await message.bot.send_chat_action(
-        chat_id=message.chat.id,
-        action=ChatAction.TYPING,
-    )
-    results = retrieve_context(
-        index,
-        question,
-        top_k=settings.top_k,
-        min_score=settings.min_score,
-    )
+    question_id = await db.save_question(telegram_id=message.from_user.id,
+                                         chat_id=message.chat.id, question=question)
+    cooldown_state = spam_cooldown.check(message.from_user.id)
+    if cooldown_state == "blocked":
+        await db.suppress_delivery(question_id=question_id)
+        return
+    if cooldown_state == "triggered":
+        notice = "Слишком много сообщений. Подождите 30 секунд и попробуйте снова."
+        try:
+            await message.answer(notice)
+        except Exception:
+            await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=False)
+            raise
+        await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=True)
+        return
+    if not rate_limiter.allow(message.from_user.id, message.chat.id):
+        try:
+            await message.answer("Подождите немного перед следующим вопросом.")
+        except Exception:
+            await db.save_delivery(question_id=question_id, answer="Ограничение частоты", sources=[], status="unverified", delivered=False)
+            raise
+        await db.save_delivery(question_id=question_id, answer="Подождите немного перед следующим вопросом.", sources=[], status="unverified", delivered=True)
+        return
 
+    try:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+    except Exception:
+        logger.warning("Unable to send typing indicator", exc_info=True)
+    search_error = False
+    try:
+        results = retrieve_context(
+            index, question, top_k=settings.top_k, min_score=settings.min_score,
+        ) if valid_question(question) else []
+    except Exception:
+        logger.exception("Retrieval failed")
+        results = []
+        search_error = True
+
+    status = "no_evidence"
     if results:
         try:
             answer = await llm.answer_question(question, results)
+            status = "unverified"
         except Exception:
             logger.exception("LLM request failed")
             answer = LLM_ERROR_MESSAGE
+            status = "error"
+    elif search_error:
+        answer = LLM_ERROR_MESSAGE
+        status = "error"
     else:
         answer = NO_RESULTS_MESSAGE
 
@@ -134,18 +167,8 @@ async def handle_question(
         for position, (score, chunk) in enumerate(results, start=1)
         if position in cited
     ]
-
-    question_id: int | None = None
-    try:
-        question_id = await db.save_question(
-            telegram_id=message.from_user.id,
-            chat_id=message.chat.id,
-            question=question,
-            answer=answer,
-            sources=sources,
-        )
-    except Exception:
-        logger.exception("Failed to save question")
+    if status == "unverified" and sources:
+        status = "with_sources"
 
     reply = _truncate(answer) + _format_sources(results, cited)
     source_links: list[tuple[str, str]] = []
@@ -169,12 +192,29 @@ async def handle_question(
                     ),
                 )
             )
+    escalate = status == "no_evidence" and await db.clarification_count(
+        telegram_id=message.from_user.id, chat_id=message.chat.id) >= 3
+    if escalate:
+        await db.record_escalation(question_id=question_id, status="requested")
+        if settings.support_url:
+            source_links.append(("Связаться со специалистом", settings.support_url))
+        else:
+            reply += "\n\nСсылка на специалиста пока не настроена."
     markup = (
         feedback_keyboard(question_id, source_links)
         if question_id is not None or source_links
         else None
     )
-    await message.answer(reply, reply_markup=markup)
+    try:
+        await message.answer(reply, reply_markup=markup)
+    except Exception:
+        await db.save_delivery(question_id=question_id, answer=answer, sources=sources, status=status, delivered=False)
+        if escalate:
+            await db.record_escalation(question_id=question_id, status="failed")
+        raise
+    await db.save_delivery(question_id=question_id, answer=answer, sources=sources, status=status, delivered=True)
+    if escalate:
+        await db.record_escalation(question_id=question_id, status="delivered" if settings.support_url else "failed")
 
 
 @router.callback_query(F.data.startswith("fb:"))
@@ -207,11 +247,17 @@ async def handle_feedback(callback: CallbackQuery, db: Database) -> None:
         return
 
     await callback.answer(FEEDBACK_MESSAGES[value])
-    if callback.message is not None:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            logger.debug("Could not remove feedback keyboard", exc_info=True)
+
+
+@router.callback_query(F.data.startswith("resolution:"))
+async def handle_resolution(callback: CallbackQuery, db: Database) -> None:
+    try:
+        _, value, raw_id = (callback.data or "").split(":")
+        await db.save_resolution(question_id=int(raw_id), telegram_id=callback.from_user.id, value=value)
+    except (ValueError, TypeError):
+        await callback.answer("Не удалось сохранить ответ.")
+        return
+    await callback.answer("Спасибо, ответ сохранён.")
 
 
 @router.message(F.text.startswith("/"))

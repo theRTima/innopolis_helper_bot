@@ -9,6 +9,16 @@ import asyncpg
 
 
 VIEWS = {
+    "grafana_outcomes_daily": """
+        SELECT date_trunc('day', COALESCE(a.received_at, q.created_at::timestamp)) AS day,
+               CASE WHEN a.operator_status IN ('requested', 'delivered', 'failed')
+                    THEN 'unresolved' ELSE COALESCE(a.resolution, 'unknown') END AS status,
+               count(*)::bigint AS total,
+               count(*) FILTER (WHERE a.operator_status IS NOT NULL)::bigint AS escalated,
+               sum(EXTRACT(EPOCH FROM (a.sent_at - a.received_at))) AS response_seconds,
+               count(*) FILTER (WHERE a.sent_at IS NOT NULL AND a.received_at IS NOT NULL)::bigint AS response_count
+        FROM questions q LEFT JOIN analytics a ON a.question_id = q.id GROUP BY 1, 2
+    """,
     "grafana_answer_daily": """
         SELECT date_trunc('day', created_at) AS day,
                COALESCE(answer_status, 'pending') AS status,

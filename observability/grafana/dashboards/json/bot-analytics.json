@@ -12,37 +12,49 @@
       "id": 1, "title": "Вопросов всего", "type": "stat",
       "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
-      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_answer_daily"}]
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_outcomes_daily"}]
     },
     {
-      "id": 2, "title": "Ответов с источниками", "type": "stat",
+      "id": 2, "title": "Подтверждённо решено", "type": "stat",
       "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
-      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_answer_daily WHERE status = 'with_sources'"}]
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_outcomes_daily WHERE status = 'resolved'"}]
     },
     {
-      "id": 3, "title": "Не помогло", "type": "stat",
+      "id": 3, "title": "Не решено", "type": "stat",
       "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
-      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_feedback_daily WHERE status = 'not_helpful'"}]
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_outcomes_daily WHERE status = 'unresolved'"}]
     },
     {
-      "id": 4, "title": "Ссылок специалисту отправлено", "type": "stat",
+      "id": 4, "title": "Запросов связи со специалистом", "type": "stat",
       "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
-      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_operator_daily WHERE status = 'delivered'"}]
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(escalated), 0)::bigint AS value FROM grafana_outcomes_daily"}]
     },
     {
-      "id": 5, "title": "Статусы ответов", "type": "table",
+      "id": 5, "title": "Исходы вопросов (unknown — без оценки)", "type": "table",
       "gridPos": {"h": 9, "w": 12, "x": 0, "y": 5},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
-      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT status, sum(total)::bigint AS questions FROM grafana_answer_daily GROUP BY status ORDER BY questions DESC"}]
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT status, sum(total)::bigint AS questions FROM grafana_outcomes_daily GROUP BY status ORDER BY questions DESC"}]
     },
     {
       "id": 6, "title": "Импорт документов", "type": "table",
       "gridPos": {"h": 9, "w": 12, "x": 12, "y": 5},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
       "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT day, imports, model_calls, cache_hits, avg_parse_ms FROM grafana_import_daily ORDER BY day DESC LIMIT 30"}]
+    },
+    {
+      "id": 7, "title": "Среднее время первого ответа, сек", "type": "stat",
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 14},
+      "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT sum(response_seconds) / NULLIF(sum(response_count), 0) AS value FROM grafana_outcomes_daily"}]
+    },
+    {
+      "id": 8, "title": "Доля подтверждённо решённых вопросов боту, %", "type": "stat",
+      "gridPos": {"h": 5, "w": 9, "x": 6, "y": 14},
+      "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT 100.0 * sum(total) FILTER (WHERE status = 'resolved') / NULLIF(sum(total), 0) AS value FROM grafana_outcomes_daily"}]
     }
   ]
 }
