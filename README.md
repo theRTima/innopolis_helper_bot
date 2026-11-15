@@ -6,22 +6,34 @@ BM25 retrieval supplies evidence to an OpenAI-compatible answer model.
 
 ## Docker setup
 
-Install Docker with Compose. The stack provides:
+### What runs
 
-- `postgres` — database
-- `bot` — Telegram polling process
-- `viewer` — signed document viewer on loopback
-- `ingest` — one-shot scanner that runs `ingest -> render -> extract` for every
-  PDF in `data/knowledge`
+| Service | Purpose | Address |
+| --- | --- | --- |
+| `bot` | Telegram polling process | — |
+| `postgres` | PostgreSQL database | `127.0.0.1:5438` |
+| `viewer` | Signed document viewer | `http://127.0.0.1:8090` |
+| `grafana` | Analytics dashboards | `http://127.0.0.1:3000/d/bot-analytics` |
+| `ingest` | One-shot PDF processing; not a long-running service | — |
+| `admin` | Optional read-only admin panel | `http://127.0.0.1:8001/admin/` |
+| `llama` | Optional local llama.cpp server | `http://127.0.0.1:8080` |
 
-Get a Telegram bot token from @BotFather and an image-capable model endpoint
-for extraction. Start by creating the environment file:
+Published ports bind to `127.0.0.1` only, so the stack is not exposed to the
+network by default.
+
+### First-time launch
+
+Follow these steps once on a new machine.
+
+**1. Install Docker with Compose.**
+
+**2. Create the environment file.**
 
 ```bash
 cp .env.example .env
 ```
 
-Set at least:
+Set at least these values in `.env`:
 
 ```env
 TELEGRAM_BOT_TOKEN=...
@@ -34,42 +46,84 @@ GRAFANA_ADMIN_PASSWORD=replace-with-another-password
 GRAFANA_DB_PASSWORD=replace-with-a-reader-password
 ```
 
-Put all PDFs into `data/knowledge/`. No per-file environment variables are
+`TELEGRAM_ALLOWED_USERNAMES` is required for access. An empty list denies
+everyone. Use Telegram usernames, not display names.
+
+**3. Add the source PDFs.**
+
+```bash
+mkdir -p data/knowledge data/processed
+```
+
+Copy the PDFs into `data/knowledge/`. No per-file environment variables are
 needed. Document IDs are derived from filenames, while existing stored manifests
 keep their current IDs.
 
-Build images, start PostgreSQL, and process documents before starting the bot:
+**4. Build the images.**
 
 ```bash
-mkdir -p data/processed
 docker compose --profile ingest build bot viewer ingest
+```
+
+The ingestion image installs CPU-only PyTorch and LibreOffice, so the first
+build takes several minutes and downloads a large amount of data.
+
+**5. Start PostgreSQL and apply migrations.**
+
+```bash
 docker compose up -d --wait postgres
+docker compose run --rm --no-deps bot alembic upgrade head
+```
+
+**6. Process every PDF.**
+
+```bash
 docker compose --profile ingest run --rm ingest
-docker compose up -d bot viewer
 ```
 
-The ingestion image installs CPU-only PyTorch to avoid unnecessary CUDA/NVIDIA
-libraries. The bot requires at least one ready chunk set and applies migrations
-at startup.
+This runs `ingest -> render -> extract` for all PDFs in `data/knowledge/`.
+Extraction calls the configured multimodal model and can take a long time for
+large documents. Unchanged files are cached on later runs.
 
-Add or replace PDFs later and run the same command again. Existing unchanged
-files use the extraction cache; new or changed files are processed
-automatically. The bot loads chunks at startup, so restart it after ingestion:
+**7. Initialize Grafana access.**
 
 ```bash
-docker compose restart bot
+docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
 ```
 
-To preview the derived document IDs without running extraction:
+This creates the aggregate views and the read-only `grafana_reader` role.
+
+**8. Start the long-running services.**
 
 ```bash
-docker compose --profile ingest run --rm ingest --dry-run
+docker compose up -d bot viewer grafana
 ```
 
-The ingestion container writes to `./data/processed`; the bot reads that host
-directory read-only. `./data/knowledge` is also mounted read-only. On Linux,
-set `HOST_UID` and `HOST_GID` in `.env` to your user ID so generated files keep
-the expected ownership.
+**9. Verify the launch.**
+
+```bash
+docker compose ps
+docker compose logs --tail=50 bot
+```
+
+`postgres` should be `healthy`, and the bot log should contain a line like:
+
+```text
+Run polling for bot @your_bot_name
+```
+
+Open:
+
+- Grafana: `http://localhost:3000/d/bot-analytics`
+- Viewer: `http://localhost:8090`
+
+Log in to Grafana as `admin` with `GRAFANA_ADMIN_PASSWORD` from `.env`.
+
+If the bot reports that no chunks were found, repeat step 6. At least one
+successfully extracted document is required for startup.
+
+On Linux, set `HOST_UID` and `HOST_GID` in `.env` to your user ID so the
+ingestion container writes files with the expected ownership.
 
 If the model endpoint runs on the host, set:
 
@@ -77,40 +131,140 @@ If the model endpoint runs on the host, set:
 LLM_BASE_URL=http://host.docker.internal:8081/v1
 ```
 
-Grafana is available at `http://localhost:3000/d/bot-analytics`. Set
-`GRAFANA_ADMIN_PASSWORD` and `GRAFANA_DB_PASSWORD` in `.env`, then initialize
-the aggregate views and their read-only database role once after migrations:
+### Add or replace PDFs later
+
+The bot does **not** need to be stopped while ingestion runs. The ingestion
+container reads `data/knowledge/` and writes `data/processed/`; the bot reads
+the processed directory read-only.
 
 ```bash
-docker compose run --rm --no-deps bot alembic upgrade head
+cp new-document.pdf data/knowledge/
+docker compose --profile ingest run --rm ingest
+docker compose restart bot
+```
+
+The scanner discovers all PDFs automatically. Existing unchanged files use the
+extraction cache; new or changed files are processed. The bot loads chunks at
+startup, so **restart it after ingestion** to make the new documents available.
+
+To preview the derived document IDs without running extraction:
+
+```bash
+docker compose --profile ingest run --rm ingest --dry-run
+```
+
+If you prefer not to serve questions during a long extraction, stop the bot
+first and start it afterwards:
+
+```bash
+docker compose stop bot
+docker compose --profile ingest run --rm ingest
+docker compose start bot
+```
+
+### Start, stop and restart services
+
+Start or stop the whole stack while keeping containers and data:
+
+```bash
+docker compose stop
+docker compose start
+```
+
+Remove the containers and network but keep the PostgreSQL and Grafana data
+volumes:
+
+```bash
+docker compose down
+```
+
+Remove the containers **and delete all stored data** (database, analytics and
+Grafana state). This is destructive:
+
+```bash
+docker compose down -v
+```
+
+Restart one service:
+
+```bash
+docker compose restart bot
+docker compose restart viewer
+docker compose restart grafana
+docker compose restart postgres
+```
+
+Restarting PostgreSQL can briefly interrupt the bot, viewer and Grafana. They
+usually reconnect automatically; if not, restart them as well.
+
+`docker compose restart` does **not** reload `.env`. After changing environment
+variables, recreate the affected container:
+
+```bash
+docker compose up -d --force-recreate bot
+docker compose up -d --force-recreate grafana
+```
+
+Stop or start an individual service without recreating it:
+
+```bash
+docker compose stop bot
+docker compose start bot
+```
+
+`ingest` is a one-shot job, not a daemon. Run it with
+`docker compose --profile ingest run --rm ingest` whenever documents change.
+
+Useful diagnostics:
+
+```bash
+docker compose ps
+docker compose logs -f bot
+docker compose logs -f grafana
+docker compose logs -f postgres
+```
+
+### Grafana
+
+Grafana is available at `http://localhost:3000/d/bot-analytics`. Set
+`GRAFANA_ADMIN_PASSWORD` and `GRAFANA_DB_PASSWORD` in `.env`, then run the
+initialization command from the first-time launch if you have not done so
+already:
+
+```bash
 docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
 docker compose up -d grafana
 ```
 
-Log in as `admin` using `GRAFANA_ADMIN_PASSWORD`. For escalation set
-`SUPPORT_URL` to an HTTPS or Telegram link. After four consecutive clarification
-requests the bot sends a button with that link; delivery indicates that Telegram
-accepted the button, not that a specialist received the request. Older records
-without explicit user feedback have an unknown outcome. Re-run the setup script
-after upgrading the database to refresh the aggregate views.
+If you change `GRAFANA_DB_PASSWORD`, rerun the setup script and recreate
+Grafana:
 
-The bot rate-limits individual questions to one every three seconds. Eight
-messages from the same user within five seconds trigger a 30-second cooldown.
-The rate-limit reply states the allowed interval and the remaining wait; the
-cooldown reply states the message limit, the time window and the cooldown.
-After the first cooldown warning, further messages during the cooldown are
-logged but receive no reply. Limits are held in process memory, so they reset
-on restart and are not shared between bot instances.
+```bash
+docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
+docker compose up -d --force-recreate grafana
+```
+
+Re-run the setup script after a database upgrade to refresh the aggregate
+views. For escalation set `SUPPORT_URL` to an HTTPS or Telegram link. After four
+consecutive clarification requests the bot sends a button with that link;
+delivery indicates that Telegram accepted the button, not that a specialist
+received the request. Older records without explicit user feedback have an
+unknown outcome.
+
+### Rate limits
+
+The bot allows one question every three seconds. Eight messages from the same
+user within five seconds trigger a 30-second cooldown. The rate-limit reply
+states the allowed interval and the remaining wait; the cooldown reply states
+the message limit, the time window and the cooldown. After the first cooldown
+warning, further messages during the cooldown are logged but receive no reply.
+Limits are held in process memory, so they reset on restart and are not shared
+between bot instances.
+
+### Ingestion notes
 
 The ingestion image includes LibreOffice. The Docker scanner currently discovers
 PDFs only; use the local pipeline below for other formats.
-
-Logs and shutdown:
-
-```bash
-docker compose logs -f bot
-docker compose down
-```
 
 ## Telegram access
 
