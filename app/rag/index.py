@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import logging
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import snowballstemmer
 
 TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,7 @@ class Chunk:
     origin: str = "docling"
     data: dict | None = None
     locator: dict | None = None
+    chunk_file: str = field(default="", compare=False)
 
     @property
     def page_label(self) -> str:
@@ -62,13 +66,19 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
             page = item.get("page")
             text = item.get("text")
             if not isinstance(chunk_id, str) or not chunk_id.strip():
-                raise ValueError(f"{chunks_path}:{line_number}: missing chunk id")
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: missing chunk id"
+                )
             if not isinstance(source, str) or not source.strip():
-                raise ValueError(f"{chunks_path}:{line_number}: missing source")
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: missing source"
+                )
             if type(page) is not int or page < 1:
                 raise ValueError(f"{chunks_path}:{line_number}: invalid page")
             if not isinstance(text, str) or not text.strip():
-                raise ValueError(f"{chunks_path}:{line_number}: missing search text")
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: missing search text"
+                )
 
             page_to = item.get("page_to", page)
             if type(page_to) is not int or page_to < page:
@@ -80,17 +90,22 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
                     page_from=page,
                     page_to=page_to,
                     text=text.strip(),
+                    chunk_file=str(chunks_path.resolve()),
                     document_id=item.get("document_id"),
                     version_id=item.get("version_id"),
                     title=str(item.get("title") or ""),
                     chunk_type=str(item.get("type") or "text"),
                     origin=str(item.get("origin") or "docling"),
-                    data=item.get("data")
-                    if isinstance(item.get("data"), dict)
-                    else None,
-                    locator=item.get("locator")
-                    if isinstance(item.get("locator"), dict)
-                    else None,
+                    data=(
+                        item.get("data")
+                        if isinstance(item.get("data"), dict)
+                        else None
+                    ),
+                    locator=(
+                        item.get("locator")
+                        if isinstance(item.get("locator"), dict)
+                        else None
+                    ),
                 )
             )
     return chunks
@@ -113,16 +128,19 @@ def _latest_chunk_manifest(version_path: Path) -> Path | None:
             continue
         if manifest.get("status") != "ready":
             continue
-        candidates.append(
-            (str(manifest.get("created_at", "")), manifest_path)
-        )
+        if not (manifest_path.parent / "chunks.jsonl").is_file():
+            logger.warning(
+                "Ignoring chunk manifest without JSONL: %s", manifest_path
+            )
+            continue
+        candidates.append((str(manifest.get("created_at", "")), manifest_path))
     if not candidates:
         return None
-    return max(candidates, key=lambda item: item[0])[1]
+    return max(candidates, key=lambda item: (item[0], str(item[1])))[1]
 
 
 def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
-    """Load the newest ready chunk set from the versioned rag_pipeline store."""
+    """Load the newest ready chunk set from the versioned store."""
     best: dict[str, tuple[str, Path]] = {}
     for manifest_path in documents_root.glob("*/sha256-*/manifest.json"):
         try:
@@ -156,21 +174,41 @@ def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
 
     chunks: list[Chunk] = []
     for _created, chunks_file in best.values():
-        chunks.extend(_read_chunk_file(chunks_file))
+        manifest_path = chunks_file.parent / "chunk_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        expected = manifest.get("chunks_sha256")
+        if expected is not None:
+            actual = hashlib.sha256(chunks_file.read_bytes()).hexdigest()
+            if actual != expected:
+                raise ValueError(f"Chunk JSONL hash mismatch: {chunks_file}")
+        loaded = _read_chunk_file(chunks_file)
+        logger.info(
+            "Selected chunks: manifest=%s created=%s count=%d types=%s "
+            "warnings=%s integrity=%s",
+            manifest_path,
+            _created,
+            len(loaded),
+            dict(Counter(chunk.chunk_type for chunk in loaded)),
+            manifest.get("warnings", []),
+            "verified" if expected is not None else "not_recorded",
+        )
+        chunks.extend(loaded)
     return chunks
 
 
 def load_chunks_auto(
     chunks_dir: Path, documents_root: Path
 ) -> tuple[list[Chunk], str]:
-    """Prefer the versioned store and fill in flat chunks for other documents."""
+    """Prefer versioned chunks, adding flat chunks for other documents."""
     versioned = load_versioned_chunks(documents_root)
     if not versioned:
         return load_chunks(chunks_dir), "flat"
 
     covered = {chunk.document for chunk in versioned}
     additions = [
-        chunk for chunk in load_chunks(chunks_dir) if chunk.document not in covered
+        chunk
+        for chunk in load_chunks(chunks_dir)
+        if chunk.document not in covered
     ]
     if additions:
         return versioned + additions, "mixed"
@@ -183,7 +221,9 @@ def chunk_source_mismatches(
     """Return PDFs without chunks and chunk sources without a matching PDF."""
     pdf_sources = {path.stem for path in knowledge_dir.glob("*.pdf")}
     chunk_sources = {chunk.document for chunk in chunks}
-    return sorted(pdf_sources - chunk_sources), sorted(chunk_sources - pdf_sources)
+    return sorted(pdf_sources - chunk_sources), sorted(
+        chunk_sources - pdf_sources
+    )
 
 
 class SearchIndex:
@@ -220,7 +260,7 @@ class SearchIndex:
         return [self._stemmer.stemWord(term) for term in tokenize(text)]
 
     def _expand_terms(self, terms: list[str]) -> list[tuple[str, float]]:
-        """Add cheap prefix matches for Russian word forms the stemmer missed."""
+        """Add prefix matches for Russian word forms the stemmer missed."""
 
         expanded: dict[str, float] = {}
         for term in terms:
@@ -240,7 +280,9 @@ class SearchIndex:
                         break
                     prefix += 1
                 if prefix >= 4:
-                    expanded[candidate] = max(expanded.get(candidate, 0.0), 0.5)
+                    expanded[candidate] = max(
+                        expanded.get(candidate, 0.0), 0.5
+                    )
         return list(expanded.items())
 
     def search(

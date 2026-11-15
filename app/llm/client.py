@@ -5,6 +5,7 @@ from __future__ import annotations
 from openai import AsyncOpenAI
 
 from app.rag.index import Chunk
+from app.rag.context import format_context as _format_context
 
 SYSTEM_PROMPT = (
     "Ты корпоративный помощник первой линии поддержки. Отвечай по-русски, "
@@ -16,18 +17,6 @@ SYSTEM_PROMPT = (
     "фрагменте, прямо скажи, что в документации нет нужной информации, и не "
     "выдумывай."
 )
-
-
-def _format_context(results: list[tuple[float, Chunk]]) -> str:
-    """Put the best chunk last: the model attends better to recent context."""
-
-    blocks = []
-    for position in range(len(results) - 1, -1, -1):
-        chunk = results[position][1]
-        blocks.append(
-            f"[{position + 1}] {chunk.document}, стр. {chunk.page_label}\n{chunk.text}"
-        )
-    return "\n\n".join(blocks)
 
 
 class LLMClient:
