@@ -88,3 +88,55 @@ def test_chunk_source_mismatches_finds_missing_and_stale_sources(tmp_path) -> No
     ]
 
     assert chunk_source_mismatches(chunks, tmp_path) == ([], ["removed"])
+
+
+def test_toc_chunks_are_skipped_for_normal_questions() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="toc",
+            document="Документ",
+            page_from=2,
+            page_to=2,
+            text="Схема процесса командировки ......... 4",
+            title="Table of Contents",
+        ),
+        Chunk(
+            chunk_id="body",
+            document="Документ",
+            page_from=7,
+            page_to=7,
+            text="Схема процесса командировки описана в инструкции.",
+            title="5 Инструкция",
+        ),
+    ]
+    index = SearchIndex(chunks)
+
+    results = index.search("схема процесса командировки", top_k=1)
+
+    assert [chunk.chunk_id for _score, chunk in results] == ["body"]
+
+
+def test_visual_chunks_are_added_for_visual_queries() -> None:
+    chunks = [
+        Chunk(
+            chunk_id="text",
+            document="Документ",
+            page_from=2,
+            page_to=2,
+            text="Схема схемы процесса процесса командировки командировки.",
+        ),
+        Chunk(
+            chunk_id="diagram",
+            document="Документ",
+            page_from=4,
+            page_to=4,
+            text="Инициация БП. Согласование. Заказ билетов нужен?",
+            title="2 Схема бизнес-процесса",
+            chunk_type="diagram",
+        ),
+    ]
+    index = SearchIndex(chunks)
+
+    results = index.search("расскажи про схему командировки", top_k=1)
+
+    assert any(chunk.chunk_id == "diagram" for _score, chunk in results)

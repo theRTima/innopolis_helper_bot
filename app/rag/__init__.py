@@ -1,1 +1,1 @@
-"""Retrieval package."""
+"""Retrieval and versioned document pipeline."""

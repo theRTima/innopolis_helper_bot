@@ -46,7 +46,7 @@ async def run() -> int:
     if not chunks:
         logger.error(
             "Чанки не найдены. Выполните python -m app.ingestion "
-            "или полный rag_pipeline: ingest -> render -> extract --all."
+            "или полный app/rag: ingest -> render -> extract --all."
         )
         return 1
 
@@ -77,7 +77,7 @@ async def run() -> int:
         missing = sorted(pdf_sources - chunk_sources)
         if missing:
             logger.error(
-                "Не обработаны PDF: %s. Выполните rag_pipeline "
+                "Не обработаны PDF: %s. Выполните app/rag "
                 "ingest -> render -> extract --all.",
                 ", ".join(missing),
             )

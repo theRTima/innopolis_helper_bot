@@ -54,7 +54,7 @@ class Settings:
             ).strip(),
             answer_max_tokens=int(os.getenv("ANSWER_MAX_TOKENS", "600")),
             temperature=float(os.getenv("TEMPERATURE", "0.1")),
-            top_k=int(os.getenv("TOP_K", "2")),
+            top_k=int(os.getenv("TOP_K", "6")),
             min_score=float(os.getenv("MIN_SCORE", "0")),
             knowledge_dir=_path("KNOWLEDGE_DIR", "data/knowledge"),
             chunks_dir=_path("CHUNKS_DIR", "data/processed"),

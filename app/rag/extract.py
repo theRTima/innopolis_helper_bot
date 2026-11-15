@@ -1,6 +1,6 @@
 """Checkpoint 3: turn a stored document version into retrieval chunks.
 
-The source of truth is the immutable version created by ``rag_pipeline.ingest``.
+The source of truth is the immutable version created by ``app.rag.ingest``.
 Rendering is optional and is used for Office documents and for visual
 fallbacks.  Chunks are written next to the version with their own manifest and
 cache key, so extraction can be rerun safely.
@@ -21,8 +21,8 @@ from pathlib import Path
 from app.ingestion import new_pipeline
 from app.ingestion import normalized as norm
 from app.ingestion import vision_parser as vp
-from rag_pipeline.ingest import sha256_file
-from rag_pipeline.render import RenderError
+from app.rag.ingest import sha256_file
+from app.rag.render import RenderError
 
 PIPELINE_VERSION = 1
 MAX_TOKENS_TARGET = 600
@@ -102,7 +102,7 @@ def latest_render(
     if not candidates:
         raise ExtractionError(
             "No ready render exists for this Office version. "
-            "Run: python -m rag_pipeline.render <version_path>"
+            "Run: python -m app.rag.render <version_path>"
         )
     _created, directory, manifest = max(candidates, key=lambda item: item[0])
     return directory, manifest

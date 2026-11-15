@@ -12,8 +12,6 @@ would silently lose a document fact.
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -66,15 +64,6 @@ class SourcePayload:
     origin: str
     asset_ids: list[str] = field(default_factory=list)
     element_id: str = ""
-
-    def as_prompt_dict(self) -> dict:
-        return {
-            "source_reference_id": self.source_reference_id,
-            "kind": self.kind,
-            "text": self.text[:1200],
-            "has_structured_data": self.data is not None,
-            "page": self.page_from,
-        }
 
 
 @dataclass
@@ -894,7 +883,3 @@ def _rows_to_markdown(rows: list[list[str]]) -> str:
     for row in normalized[1:]:
         lines.append("| " + " | ".join(row) + " |")
     return "\n".join(lines)
-
-
-def dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)

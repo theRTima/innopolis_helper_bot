@@ -16,7 +16,6 @@ The output is a JSONL file of self-contained RAG chunks plus a Markdown preview.
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 from pathlib import Path
@@ -651,25 +650,3 @@ def parse_document(pdf_path, out_dir=None, pages_spec=None):
     print(f"Saved {len(final)} chunks to {jsonl_path}")
     print(f"Human-readable preview: {md_path}")
     return final
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Parse a PDF with Docling, using vision for pictures and unreadable pages."
-    )
-    parser.add_argument("pdf", help="PDF path")
-    parser.add_argument(
-        "--out-dir", default=None, help="Output directory (default: data/processed)"
-    )
-    parser.add_argument(
-        "--pages",
-        default=None,
-        help="1-based pages to parse, e.g. '4' or '4,7-9' (default: all)",
-    )
-    args = parser.parse_args()
-
-    parse_document(args.pdf, out_dir=args.out_dir, pages_spec=args.pages)
-
-
-if __name__ == "__main__":
-    main()

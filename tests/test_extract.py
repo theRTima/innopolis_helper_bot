@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from rag_pipeline.extract import extract_version
+from app.rag.extract import extract_version
 
 
 def _text_version(tmp_path: Path) -> Path:

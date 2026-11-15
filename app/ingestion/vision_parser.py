@@ -7,7 +7,6 @@ output-file icons -- into chunks for the Telegram assistant.
 
 from __future__ import annotations
 
-import argparse
 import base64
 import json
 import mimetypes
@@ -19,19 +18,15 @@ from jinja2 import Environment, FileSystemLoader
 from openai import OpenAI
 
 from app.config import Settings
+from app.ingestion.normalized import build_search_text, flatten
 
 BASE_DIR = Path(__file__).resolve().parent
-PROJECT_DIR = Path(__file__).resolve().parents[2]
 PROMPTS_DIR = BASE_DIR / "prompts"
 
 SETTINGS = Settings.from_env()
 MODEL_ID = SETTINGS.llm_model
 DPI = 200
 MAX_TOKENS = 8192
-
-# An embedded image is treated as document content if it covers this share of
-# the page. Small logos/icons are ignored.
-IMAGE_AREA_RATIO = 0.03
 
 BOILERPLATE_RE = re.compile(
     r"Ошибка! Используйте вкладку.*?(?:–|-)\s*\d+", re.DOTALL
@@ -47,7 +42,7 @@ env = Environment(loader=FileSystemLoader(PROMPTS_DIR))
 # Legacy image -> chunk flow used by the flat ingestion CLI.
 chunker_prompt = env.get_template("legacy/vision_chunker.j2")
 analysis_prompt = env.get_template("legacy/image_analysis.j2")
-# Normalized-element flow used by rag_pipeline.extract.
+# Normalized-element flow used by app.rag.extract.
 normalized_chunker_prompt = env.get_template("vision_chunker.j2")
 normalized_analysis_prompt = env.get_template("image_analysis.j2")
 
@@ -125,23 +120,6 @@ def parse_json_object(raw):
     return {}
 
 
-def flatten(value):
-    """Flatten nested metadata into searchable text."""
-    if isinstance(value, dict):
-        return " ".join(flatten(item) for item in value.values())
-    if isinstance(value, list):
-        return " ".join(flatten(item) for item in value)
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def build_search_text(title, content, data):
-    """Text that will be embedded into the vector index."""
-    parts = [title, content, flatten(data)]
-    return "\n".join(part for part in parts if part)
-
-
 def normalize_chunks(raw_chunks, pdf_name, page_number, mode, start_index):
     """Validate model output and attach retrieval metadata."""
     chunks = []
@@ -175,15 +153,6 @@ def normalize_chunks(raw_chunks, pdf_name, page_number, mode, start_index):
             }
         )
     return chunks
-
-
-def coverage_ratio(chunks, reference):
-    """How much of the page's text layer the model managed to cover."""
-    reference = clean_content(reference)
-    if not reference:
-        return 1.0
-    total = sum(len(clean_content(chunk["content"])) for chunk in chunks)
-    return total / len(reference)
 
 
 def extract_chunks(
@@ -319,18 +288,6 @@ def postprocess_page_chunks(chunks, pdf_name, page_number):
     return split
 
 
-def render_text_page(doc, page_index, image_rects, out_dir):
-    """Render a page with large embedded images whited out."""
-    page = doc.load_page(page_index)
-    for rect in image_rects:
-        page.add_redact_annot(rect)
-    page.apply_redactions()
-
-    path = out_dir / f"page_{page_index + 1:03d}_text.png"
-    page.get_pixmap(dpi=DPI).save(path)
-    return path
-
-
 def render_embedded_image(doc, xref, page_index, image_index, out_dir):
     """Save an embedded image at its native resolution."""
     pix = pymupdf.Pixmap(doc, xref)
@@ -342,22 +299,6 @@ def render_embedded_image(doc, xref, page_index, image_index, out_dir):
     path = out_dir / f"page_{page_index + 1:03d}_image_{image_index:02d}.png"
     pix.save(path)
     return path
-
-
-def find_content_images(page):
-    """Return large embedded images that carry document content."""
-    images = []
-    page_area = page.rect.get_area()
-
-    for info in page.get_image_info(xrefs=True):
-        if not info.get("xref"):
-            continue
-        rect = pymupdf.Rect(info["bbox"])
-        if rect.get_area() < IMAGE_AREA_RATIO * page_area:
-            continue
-        images.append({"xref": info["xref"], "rect": rect})
-
-    return images
 
 
 def parse_pages(spec, page_count):
@@ -410,135 +351,3 @@ def write_outputs(chunks, pdf_path, out_dir):
     md_path.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
 
     return jsonl_path, md_path
-
-
-def parse_document(pdf_path, out_dir=None, pages_spec=None):
-    """Parse a PDF into a list of RAG chunks.
-
-    Args:
-        pdf_path: PDF to parse.
-        out_dir: Directory for temporary images and output files.
-        pages_spec: Optional 1-based page selection, e.g. "4" or "4,7-9".
-    """
-    pdf_path = Path(pdf_path).expanduser().resolve()
-    out_dir = (
-        Path(out_dir).expanduser().resolve()
-        if out_dir
-        else PROJECT_DIR / "data" / "processed"
-    )
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    chunks = []
-    created_images = []
-    doc = pymupdf.open(pdf_path)
-
-    try:
-        for page_index in parse_pages(pages_spec, doc.page_count):
-            page = doc.load_page(page_index)
-            images = find_content_images(page)
-            page_text = page.get_text("text").strip()
-            page_chunks = []
-
-            text_page = render_text_page(
-                doc, page_index, [image["rect"] for image in images], out_dir
-            )
-            created_images.append(text_page)
-
-            print(f"page {page_index + 1}: text/vector")
-            page_chunks = extract_chunks(
-                text_page,
-                pdf_path.name,
-                page_index + 1,
-                "page",
-                start_index=0,
-                page_text=page_text,
-            )
-
-            if page_text and coverage_ratio(page_chunks, page_text) < 0.6:
-                print(f"page {page_index + 1}: incomplete, retrying")
-                retry_chunks = extract_chunks(
-                    text_page,
-                    pdf_path.name,
-                    page_index + 1,
-                    "page",
-                    start_index=0,
-                    page_text=page_text,
-                    retry_note=(
-                        "Your previous answer covered only part of the page. "
-                        "Return ALL sections, tables and numbered instructions "
-                        "from this page as separate chunks. Do not stop after "
-                        "the first paragraph."
-                    ),
-                )
-                if coverage_ratio(retry_chunks, page_text) > coverage_ratio(
-                    page_chunks, page_text
-                ):
-                    page_chunks = retry_chunks
-
-            # Last resort: keep the clean text layer so no instruction is lost.
-            if page_text and coverage_ratio(page_chunks, page_text) < 0.4:
-                page_chunks.append(
-                    {
-                        "source": pdf_path.name,
-                        "page": page_index + 1,
-                        "chunk_index": 0,
-                        "origin": "page_fallback",
-                        "type": "text",
-                        "title": f"Текст страницы {page_index + 1}",
-                        "content": clean_content(page_text),
-                        "data": None,
-                        "text": "",
-                    }
-                )
-
-            for image_index, image in enumerate(images):
-                image_path = render_embedded_image(
-                    doc, image["xref"], page_index, image_index, out_dir
-                )
-                created_images.append(image_path)
-
-                print(f"page {page_index + 1}: embedded image {image_index + 1}")
-                page_chunks.extend(
-                    extract_chunks(
-                        image_path,
-                        pdf_path.name,
-                        page_index + 1,
-                        "image",
-                        start_index=0,
-                    )
-                )
-
-            chunks.extend(
-                postprocess_page_chunks(page_chunks, pdf_path.name, page_index + 1)
-            )
-    finally:
-        doc.close()
-        for image_path in created_images:
-            image_path.unlink(missing_ok=True)
-
-    jsonl_path, md_path = write_outputs(chunks, pdf_path, out_dir)
-    print(f"Saved {len(chunks)} chunks to {jsonl_path}")
-    print(f"Human-readable preview: {md_path}")
-    return chunks
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Parse a PDF into vision-generated RAG chunks."
-    )
-    parser.add_argument("pdf", help="PDF path")
-    parser.add_argument(
-        "--out-dir", default=None, help="Output directory (default: data/processed)"
-    )
-    parser.add_argument(
-        "--pages",
-        default=None,
-        help="1-based pages to parse, e.g. '4' or '4,7-9' (default: all)",
-    )
-    args = parser.parse_args()
-
-    parse_document(args.pdf, out_dir=args.out_dir, pages_spec=args.pages)
-
-
-if __name__ == "__main__":
-    main()

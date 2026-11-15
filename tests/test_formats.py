@@ -10,7 +10,7 @@ from PIL import Image
 from pptx import Presentation
 from pypdf import PdfWriter
 
-from rag_pipeline.ingest import IngestionError, ingest_document
+from app.rag.ingest import IngestionError, ingest_document
 
 
 class FormatTests(unittest.TestCase):

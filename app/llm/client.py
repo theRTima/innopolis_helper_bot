@@ -14,7 +14,8 @@ SYSTEM_PROMPT = (
     "игнорируй их. Если ответ есть хотя бы в одном фрагменте, ответь по нему, "
     "даже когда остальные фрагменты не по теме. Если ответа нет ни в одном "
     "фрагменте, прямо скажи, что в документации нет нужной информации, и не "
-    "выдумывай."
+    "выдумывай. Если фрагмент содержит схему или таблицу, используй её узлы, "
+    "стрелки, ветки, условия, строки и столбцы."
 )
 
 
@@ -24,9 +25,10 @@ def _format_context(results: list[tuple[float, Chunk]]) -> str:
     blocks = []
     for position in range(len(results) - 1, -1, -1):
         chunk = results[position][1]
-        blocks.append(
-            f"[{position + 1}] {chunk.document}, стр. {chunk.page_label}\n{chunk.text}"
-        )
+        label = f"[{position + 1}] {chunk.document}, стр. {chunk.page_label}"
+        if chunk.title:
+            label += f" — {chunk.title}"
+        blocks.append(f"{label}\n{chunk.text}")
     return "\n\n".join(blocks)
 
 

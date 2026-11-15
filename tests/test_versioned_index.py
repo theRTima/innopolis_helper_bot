@@ -1,4 +1,4 @@
-"""Tests for loading chunks from the versioned rag_pipeline store."""
+"""Tests for loading chunks from the versioned app.app/rag store."""
 
 from __future__ import annotations
 

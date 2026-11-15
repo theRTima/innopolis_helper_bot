@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pypdf import PdfWriter
 
-from rag_pipeline.ingest import IngestionError, ingest_pdf, sha256_file
+from app.rag.ingest import IngestionError, ingest_pdf, sha256_file
 
 
 class IngestTests(unittest.TestCase):

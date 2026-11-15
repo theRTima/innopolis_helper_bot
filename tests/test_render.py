@@ -11,8 +11,8 @@ from pptx import Presentation
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, NameObject
 
-from rag_pipeline.ingest import ingest_document
-from rag_pipeline.render import (
+from app.rag.ingest import ingest_document
+from app.rag.render import (
     RenderError,
     find_office,
     render_all,
@@ -116,7 +116,7 @@ class RenderTests(unittest.TestCase):
 
     def test_failure_does_not_publish_partial_result(self):
         version = self.ingest(self.pdf())
-        with patch("rag_pipeline.render.MAX_PIXELS", 1):
+        with patch("app.rag.render.MAX_PIXELS", 1):
             with self.assertRaises(RenderError):
                 render_version(version, 72)
         self.assertEqual(list((version / "renders").iterdir()), [])
