@@ -8,11 +8,11 @@ import re
 from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.anchors import Locator, LocatorKind, build_anchor_url
 from app.bot.keyboards import feedback_keyboard
-from app.bot.input_filter import RateLimiter, SpamCooldown, valid_question
+from app.bot.input_filter import GibberishMute, RateLimiter, SpamCooldown, valid_question
 from app.config import Settings
 from app.llm.client import LLMClient
 from app.rag.index import Chunk, SearchIndex
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 router = Router(name="main")
 rate_limiter = RateLimiter()
 spam_cooldown = SpamCooldown()
+gibberish_mute = GibberishMute()
 
 FEEDBACK_MESSAGES = {
     "helpful": "Спасибо! Отметил ответ как полезный.",
@@ -62,6 +63,8 @@ def _truncate(text: str) -> str:
 
 @router.message(CommandStart())
 async def handle_start(message: Message, index: SearchIndex) -> None:
+    if message.from_user and gibberish_mute.is_muted(message.from_user.id):
+        return
     documents = sorted({chunk.document for chunk in index.chunks})
     if documents:
         corpus = "\n".join(f"- {document}" for document in documents)
@@ -81,12 +84,14 @@ async def handle_start(message: Message, index: SearchIndex) -> None:
 
 @router.message(Command("help"))
 async def handle_help(message: Message) -> None:
+    if message.from_user and gibberish_mute.is_muted(message.from_user.id):
+        return
     await message.answer(
         "Как пользоваться ботом:\n"
         "1. Напишите вопрос обычным текстом.\n"
         "2. Бот найдёт фрагменты в загруженных PDF и ответит со ссылкой на "
         "источник.\n"
-        "3. Оцените ответ кнопками «Помогло» или «Не помогло».\n\n"
+        "3. Отметьте, решён ли ваш вопрос.\n\n"
         "Если в документации нет ответа, бот честно об этом скажет."
     )
 
@@ -101,6 +106,12 @@ async def handle_question(
 ) -> None:
     question = (message.text or "").strip()
     if message.from_user is None:
+        return
+
+    if gibberish_mute.is_muted(message.from_user.id):
+        return
+    if not valid_question(question):
+        gibberish_mute.record_invalid(message.from_user.id)
         return
 
     question_id = await db.save_question(telegram_id=message.from_user.id,
@@ -135,7 +146,7 @@ async def handle_question(
     try:
         results = retrieve_context(
             index, question, top_k=settings.top_k, min_score=settings.min_score,
-        ) if valid_question(question) else []
+        )
     except Exception:
         logger.exception("Retrieval failed")
         results = []
@@ -247,6 +258,21 @@ async def handle_feedback(callback: CallbackQuery, db: Database) -> None:
         return
 
     await callback.answer(FEEDBACK_MESSAGES[value])
+    await _remove_answer_buttons(callback)
+
+
+async def _remove_answer_buttons(callback: CallbackQuery) -> None:
+    message = callback.message
+    if message is None or not isinstance(message, Message) or message.reply_markup is None:
+        return
+    rows = [
+        remaining for row in message.reply_markup.inline_keyboard
+        if (remaining := [button for button in row if not (button.callback_data or "").startswith(("fb:", "resolution:"))])
+    ]
+    try:
+        await message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+    except Exception:
+        logger.exception("Could not remove answer buttons")
 
 
 @router.callback_query(F.data.startswith("resolution:"))
@@ -258,8 +284,17 @@ async def handle_resolution(callback: CallbackQuery, db: Database) -> None:
         await callback.answer("Не удалось сохранить ответ.")
         return
     await callback.answer("Спасибо, ответ сохранён.")
+    await _remove_answer_buttons(callback)
 
 
 @router.message(F.text.startswith("/"))
-async def handle_unknown_command(message: Message) -> None:
-    await message.answer("Неизвестная команда. Доступны /start и /help.")
+async def handle_unknown_command(
+    message: Message, index: SearchIndex, llm: LLMClient, db: Database, settings: Settings
+) -> None:
+    if message.from_user and gibberish_mute.is_muted(message.from_user.id):
+        return
+    text = (message.text or "").strip()
+    if re.fullmatch(r"/[a-zA-Z0-9_]{1,32}(?:@[a-zA-Z0-9_]{1,32})?(?:\s.*)?", text):
+        await message.answer("Неизвестная команда. Доступны /start и /help.")
+        return
+    await handle_question(message, index, llm, db, settings)

@@ -14,18 +14,6 @@ def feedback_keyboard(
         for label, url in (source_links or [])
     ]
     if question_id is not None:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text="Помогло",
-                    callback_data=f"fb:helpful:{question_id}",
-                ),
-                InlineKeyboardButton(
-                    text="Не помогло",
-                    callback_data=f"fb:not_helpful:{question_id}",
-                ),
-            ]
-        )
         rows.append([
             InlineKeyboardButton(text="Вопрос решён: да", callback_data=f"resolution:resolved:{question_id}"),
             InlineKeyboardButton(text="Нет", callback_data=f"resolution:unresolved:{question_id}"),
