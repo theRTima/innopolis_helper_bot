@@ -15,7 +15,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from fastapi_amis_admin.admin.admin import AdminAction, ModelAdmin
 from fastapi_amis_admin.admin.extensions.admin import ReadOnlyModelAdmin
@@ -337,7 +337,7 @@ def register_access_routes(
         return RedirectResponse("/access-invites", status_code=303)
 
 
-def register_access_admins(site, engine: AsyncEngine) -> None:
+def register_access_admins(site, engine) -> None:
     access_engine = engine
 
     @site.register_admin
@@ -397,6 +397,18 @@ def register_access_admins(site, engine: AsyncEngine) -> None:
             AccessInvite.use_count,
             AccessInvite.revoked_at,
             AccessInvite.created_at,
+        ]
+        admin_action_maker = [
+            lambda admin: AdminAction(
+                admin,
+                name="create_invite",
+                action=ActionType.Url(
+                    label="Create invitation",
+                    url="/access-invites",
+                    blank=False,
+                ),
+                flags=["toolbar"],
+            )
         ]
 
     @site.register_admin
