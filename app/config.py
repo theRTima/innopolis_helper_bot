@@ -23,6 +23,8 @@ class Settings:
     llm_api_key: str
     llm_session_id: str
     llm_user_agent: str
+    llm_answer_reasoning_effort: str
+    llm_extraction_reasoning_effort: str
     answer_max_tokens: int
     temperature: float
     top_k: int
@@ -50,6 +52,12 @@ class Settings:
             ).strip(),
             llm_user_agent=os.getenv(
                 "LLM_USER_AGENT", "innopolis-helper-bot/1.0"
+            ).strip(),
+            llm_answer_reasoning_effort=os.getenv(
+                "LLM_ANSWER_REASONING_EFFORT", "minimal"
+            ).strip(),
+            llm_extraction_reasoning_effort=os.getenv(
+                "LLM_EXTRACTION_REASONING_EFFORT", "low"
             ).strip(),
             answer_max_tokens=int(os.getenv("ANSWER_MAX_TOKENS", "600")),
             temperature=float(os.getenv("TEMPERATURE", "0.1")),

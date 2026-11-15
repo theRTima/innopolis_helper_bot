@@ -57,11 +57,17 @@ def get_client() -> OpenAI:
 
 
 def _chat_text(messages: list[dict]) -> str:
+    kwargs = {}
+    if SETTINGS.llm_extraction_reasoning_effort:
+        kwargs["reasoning_effort"] = (
+            SETTINGS.llm_extraction_reasoning_effort
+        )
     response = get_client().chat.completions.create(
         model=MODEL_ID,
         messages=messages,
         max_tokens=MAX_TOKENS,
         temperature=0.0,
+        **kwargs,
     )
     message = response.choices[0].message
     return (

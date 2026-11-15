@@ -41,6 +41,7 @@ class LLMClient:
         api_key: str,
         session_id: str,
         user_agent: str,
+        reasoning_effort: str,
         max_tokens: int,
         temperature: float,
     ) -> None:
@@ -53,6 +54,7 @@ class LLMClient:
             },
         )
         self._model = model
+        self._reasoning_effort = reasoning_effort
         self._max_tokens = max_tokens
         self._temperature = temperature
 
@@ -65,6 +67,9 @@ class LLMClient:
             f"Вопрос: {question}\n\n"
             f"Фрагменты документации:\n\n{_format_context(results)}"
         )
+        kwargs = {}
+        if self._reasoning_effort:
+            kwargs["reasoning_effort"] = self._reasoning_effort
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -73,6 +78,7 @@ class LLMClient:
             ],
             temperature=self._temperature,
             max_tokens=self._max_tokens,
+            **kwargs,
         )
         message = response.choices[0].message
         return (

@@ -83,6 +83,8 @@ images.
 | `LLM_API_KEY` | `local` | Provider API key |
 | `LLM_SESSION_ID` | `innopolis-helper-bot` | Stable routing/session header |
 | `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Client identification |
+| `LLM_ANSWER_REASONING_EFFORT` | `minimal` | Reasoning effort for Telegram answers |
+| `LLM_EXTRACTION_REASONING_EFFORT` | `low` | Reasoning effort for picture/page analysis and chunk grouping |
 | `ANSWER_MAX_TOKENS` | `600` | Answer generation limit |
 | `TEMPERATURE` | `0.1` | Answer generation temperature |
 | `TOP_K` | `6` | Number of chunks passed to the LLM |
@@ -97,6 +99,10 @@ images.
 `LLM_SESSION_ID` and `LLM_USER_AGENT` are required by some providers (for
 example, OpenCode Go uses `x-opencode-session` for routing). They are harmless
 for generic OpenAI-compatible providers.
+
+Reasoning levels are provider model parameters (`none`, `minimal`, `low`,
+`medium`, `high`). The defaults keep answers concise (`minimal`) and give
+extraction one level more (`low`) for diagram and page analysis.
 
 ## 3. Prepare documentation
 
@@ -134,6 +140,44 @@ The console scripts are also available after `pip install -e .`:
 .venv/bin/rag-ingest ...
 .venv/bin/rag-render ...
 .venv/bin/rag-extract ...
+```
+
+### Old commands
+
+Commands from older versions are no longer valid:
+
+```text
+python -m rag_pipeline.ingest   # old
+python -m rag_pipeline.render   # old
+python -m rag_pipeline.extract  # old
+```
+
+Use the `app.rag` module paths or the console scripts instead. If you see
+`ModuleNotFoundError: No module named 'rag_pipeline'`, the command is outdated.
+
+### Add another PDF
+
+For example, to add `Реестр мебели.pdf`:
+
+```bash
+.venv/bin/python -m app.rag.ingest \
+  "data/knowledge/Реестр мебели.pdf" \
+  --document-id furniture
+```
+
+The ingest command prints the version path. Extract that version:
+
+```bash
+.venv/bin/python -m app.rag.extract \
+  "data/processed/documents/furniture/sha256-<hash>"
+```
+
+Rendering is optional for a PDF and required for Office files:
+
+```bash
+.venv/bin/python -m app.rag.render \
+  "data/processed/documents/furniture/sha256-<hash>" \
+  --dpi 150
 ```
 
 ### Debug a single version

@@ -64,6 +64,7 @@ def configuration() -> dict:
         "model": vp.MODEL_ID,
         "dpi": vp.DPI,
         "max_tokens": vp.MAX_TOKENS,
+        "reasoning_effort": vp.SETTINGS.llm_extraction_reasoning_effort,
         "prompts": prompt_hashes(),
         "code": {
             "new_pipeline": sha256_file(Path(new_pipeline.__file__)),

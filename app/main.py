@@ -66,6 +66,7 @@ async def run() -> int:
         api_key=settings.llm_api_key,
         session_id=settings.llm_session_id,
         user_agent=settings.llm_user_agent,
+        reasoning_effort=settings.llm_answer_reasoning_effort,
         max_tokens=settings.answer_max_tokens,
         temperature=settings.temperature,
     )
