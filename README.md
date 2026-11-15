@@ -344,6 +344,41 @@ docker compose logs -f bot
 docker compose down
 ```
 
+## Local administration preview
+
+The optional FastAPI-Amis-Admin application displays questions, documents and
+Telegram users. It has read-only model actions and a separate database role;
+the `users` table contains Telegram IDs and creation dates, not names.
+
+Install it in a separate environment: this admin version requires a different
+FastAPI version from the one the bot image may install.
+
+```bash
+python3 -m venv storage/admin-venv
+storage/admin-venv/bin/pip install -r requirements/admin.txt
+```
+
+Create the read-only PostgreSQL role using the bot database owner's URL and a
+new password, then configure the panel with the reader role's URL:
+
+```bash
+DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' \
+ADMIN_READER_PASSWORD='READER_PASSWORD' \
+  storage/admin-venv/bin/python scripts/setup_admin_reader.py
+
+export ADMIN_DATABASE_URL='postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot'
+export ADMIN_USERNAME='admin'
+export ADMIN_PASSWORD='CHOOSE_A_STRONG_PASSWORD'
+storage/admin-venv/bin/uvicorn app.admin.web:create_app --factory --host 127.0.0.1 --port 8001
+```
+
+Replace the example passwords; percent-encode special characters in URLs. The
+password for the panel is separate from the database password. Open
+`http://127.0.0.1:8001/admin/` and enter the admin username and password.
+The panel is a local preview using HTTP Basic authentication; configure HTTPS
+and appropriate access control before exposing it beyond the machine. AMIS
+loads interface assets from `unpkg.com` by default.
+
 ## 5. Optional document viewer
 
 Set both values in `.env`:
