@@ -456,18 +456,18 @@ async def handle_sources(
         if any(button.callback_data == callback.data for button in row):
             if hiding:
                 rows.append([InlineKeyboardButton(
-                    text="Показать источники",
+                    text="Источники",
                     callback_data=f"sources:{question_id}",
                 )])
             else:
-                rows.append([InlineKeyboardButton(
-                    text="Скрыть источники",
-                    callback_data=f"sources:hide:{question_id}",
-                )])
                 rows.extend([
                     [InlineKeyboardButton(text=label, url=url)]
                     for label, url in links
                 ])
+                rows.append([InlineKeyboardButton(
+                    text="Назад",
+                    callback_data=f"sources:hide:{question_id}",
+                )])
             replaced = True
         else:
             rows.append(row)

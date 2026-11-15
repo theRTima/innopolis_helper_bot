@@ -14,7 +14,7 @@ def feedback_keyboard(
     rows = []
     if has_sources and question_id is not None:
         rows.append([InlineKeyboardButton(
-            text="Показать источники",
+            text="Источники",
             callback_data=f"sources:{question_id}",
         )])
     rows.extend([
