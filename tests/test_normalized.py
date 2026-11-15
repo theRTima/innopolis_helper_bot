@@ -111,10 +111,13 @@ def test_table_row_selector_keeps_header():
         source_sha256="abc",
         artifact="original.pdf",
     )
-    assert len(chunks) == 1
-    assert "| A | B |" in chunks[0]["content"]
-    assert "| 3 | 4 |" in chunks[0]["content"]
-    assert "| 1 | 2 |" not in chunks[0]["content"]
+    assert len(chunks) == 2
+    partial, recovered = chunks
+    assert "| A | B |" in partial["content"]
+    assert "| 3 | 4 |" in partial["content"]
+    assert "| 1 | 2 |" not in partial["content"]
+    # The full table is recovered so unselected rows are not lost.
+    assert "| 1 | 2 |" in recovered["content"]
 
 
 def test_deterministic_fallback_groups_text_and_keeps_tables():

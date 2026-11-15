@@ -83,8 +83,11 @@ images.
 | `LLM_API_KEY` | `local` | Provider API key |
 | `LLM_SESSION_ID` | `innopolis-helper-bot` | Stable routing/session header |
 | `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Client identification |
-| `LLM_ANSWER_REASONING_EFFORT` | `minimal` | Reasoning effort for Telegram answers |
+| `LLM_ANSWER_REASONING_EFFORT` | `minimal` | Fallback reasoning effort for answers when thinking budget is not used |
 | `LLM_EXTRACTION_REASONING_EFFORT` | `low` | Reasoning effort for picture/page analysis and chunk grouping |
+| `LLM_ENABLE_THINKING` | `auto` | Bounded thinking for the tested OpenCode/qwen pair |
+| `LLM_THINKING_BUDGET` | provider default (`512`) | Maximum thinking tokens when enabled |
+| `ANSWER_MAX_COMPLETION_TOKENS` | `1400` | Combined thinking + answer token budget |
 | `ANSWER_MAX_TOKENS` | `600` | Answer generation limit |
 | `TEMPERATURE` | `0.1` | Answer generation temperature |
 | `TOP_K` | `6` | Number of chunks passed to the LLM |
@@ -101,8 +104,10 @@ example, OpenCode Go uses `x-opencode-session` for routing). They are harmless
 for generic OpenAI-compatible providers.
 
 Reasoning levels are provider model parameters (`none`, `minimal`, `low`,
-`medium`, `high`). The defaults keep answers concise (`minimal`) and give
-extraction one level more (`low`) for diagram and page analysis.
+`medium`, `high`). Extraction uses `low`; answer generation uses a bounded
+thinking budget for the tested OpenCode/qwen pair. For other providers/models,
+`LLM_ANSWER_REASONING_EFFORT` is used when no thinking budget is active.
+See `docs/answer-latency.md` for measurements and provider constraints.
 
 ## 3. Prepare documentation
 
@@ -278,6 +283,11 @@ SQLite/PostgreSQL
   text chunks above them.
 - The answer prompt explicitly tells the LLM to use diagram nodes/edges and
   table rows/columns when present.
+- Context expansion (`app/rag/retrieve.py`) adds related chunks from the same
+  document/version up to a bounded limit (6 chunks / 12,000 characters) and
+  never truncates a chunk to fit.
+- Offline diagnostics: `python -m app.rag.inspect` and
+  `python -m app.rag.evaluate` (see `docs/visual-rag-plan.md`).
 
 ## Storage layout
 

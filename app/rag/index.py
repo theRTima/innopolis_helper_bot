@@ -3,15 +3,23 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import logging
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import snowballstemmer
+from app.rag.representation import (
+    is_navigation,
+    query_representation,
+    search_representation,
+)
 
 TOKEN_RE = re.compile(r"[a-zа-яё0-9]+", re.IGNORECASE)
+logger = logging.getLogger(__name__)
 
 VISUAL_TYPES = {"diagram", "image", "screenshot", "form"}
 VISUAL_QUERY_TERMS = (
@@ -26,7 +34,7 @@ VISUAL_QUERY_TERMS = (
     "стрелк",
     "ветк",
 )
-TOC_QUERY_TERMS = ("содерж", "оглавлен", "раздел", "структур")
+TOC_QUERY_TERMS = ("содерж", "оглавлен", "раздел", "структур", "contents")
 
 
 @dataclass(frozen=True)
@@ -43,6 +51,10 @@ class Chunk:
     origin: str = "docling"
     data: dict | None = None
     locator: dict | None = None
+    chunk_file: str = field(default="", compare=False)
+    asset_ids: tuple[str, ...] = field(default=(), compare=False)
+    assets: tuple[dict, ...] = field(default=(), compare=False)
+    content: str = field(default="", compare=False)
 
     @property
     def page_label(self) -> str:
@@ -63,13 +75,19 @@ def _is_toc(chunk: Chunk) -> bool:
     return ".........." in chunk.text
 
 
-def _index_text(chunk: Chunk) -> str:
+def _index_text(chunk: Chunk, use_search_representation: bool = True) -> str:
     """Text used only for BM25, not for the LLM context.
 
-    Visual chunks are long and BM25 penalises them by length. Repeating their
-    title and document name compensates for that without bloating the prompt.
+    Search-only representations add visual hints and translations. Visual
+    chunks are long and BM25 penalises them by length, so their title and
+    document name are repeated as well.
     """
-    base = f"{chunk.document}\n{chunk.text}"
+    base = (
+        search_representation(chunk)
+        if use_search_representation
+        else chunk.text
+    )
+    base = f"{chunk.document}\n{base}"
     if chunk.chunk_type in VISUAL_TYPES:
         return (
             f"{chunk.title}\n" * 3
@@ -101,13 +119,19 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
             page = item.get("page")
             text = item.get("text")
             if not isinstance(chunk_id, str) or not chunk_id.strip():
-                raise ValueError(f"{chunks_path}:{line_number}: missing chunk id")
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: missing chunk id"
+                )
             if not isinstance(source, str) or not source.strip():
-                raise ValueError(f"{chunks_path}:{line_number}: missing source")
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: missing source"
+                )
             if type(page) is not int or page < 1:
                 raise ValueError(f"{chunks_path}:{line_number}: invalid page")
             if not isinstance(text, str) or not text.strip():
-                raise ValueError(f"{chunks_path}:{line_number}: missing search text")
+                raise ValueError(
+                    f"{chunks_path}:{line_number}: missing search text"
+                )
 
             page_to = item.get("page_to", page)
             if type(page_to) is not int or page_to < page:
@@ -119,17 +143,33 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
                     page_from=page,
                     page_to=page_to,
                     text=text.strip(),
+                    content=str(item.get("content") or ""),
+                    chunk_file=str(chunks_path.resolve()),
+                    asset_ids=tuple(
+                        value
+                        for value in item.get("asset_ids", [])
+                        if isinstance(value, str)
+                    ),
+                    assets=tuple(
+                        value
+                        for value in item.get("assets", [])
+                        if isinstance(value, dict)
+                    ),
                     document_id=item.get("document_id"),
                     version_id=item.get("version_id"),
                     title=str(item.get("title") or ""),
                     chunk_type=str(item.get("type") or "text"),
                     origin=str(item.get("origin") or "docling"),
-                    data=item.get("data")
-                    if isinstance(item.get("data"), dict)
-                    else None,
-                    locator=item.get("locator")
-                    if isinstance(item.get("locator"), dict)
-                    else None,
+                    data=(
+                        item.get("data")
+                        if isinstance(item.get("data"), dict)
+                        else None
+                    ),
+                    locator=(
+                        item.get("locator")
+                        if isinstance(item.get("locator"), dict)
+                        else None
+                    ),
                 )
             )
     return chunks
@@ -144,12 +184,15 @@ def _latest_chunk_manifest(version_path: Path) -> Path | None:
             continue
         if manifest.get("status") != "ready":
             continue
-        candidates.append(
-            (str(manifest.get("created_at", "")), manifest_path)
-        )
+        if not (manifest_path.parent / "chunks.jsonl").is_file():
+            logger.warning(
+                "Ignoring chunk manifest without JSONL: %s", manifest_path
+            )
+            continue
+        candidates.append((str(manifest.get("created_at", "")), manifest_path))
     if not candidates:
         return None
-    return max(candidates, key=lambda item: item[0])[1]
+    return max(candidates, key=lambda item: (item[0], str(item[1])))[1]
 
 
 def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
@@ -187,8 +230,33 @@ def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
 
     chunks: list[Chunk] = []
     for _created, chunks_file in best.values():
-        chunks.extend(_read_chunk_file(chunks_file))
+        manifest_path = chunks_file.parent / "chunk_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        expected = manifest.get("chunks_sha256")
+        if expected is not None:
+            actual = hashlib.sha256(chunks_file.read_bytes()).hexdigest()
+            if actual != expected:
+                raise ValueError(f"Chunk JSONL hash mismatch: {chunks_file}")
+        loaded = _read_chunk_file(chunks_file)
+        logger.info(
+            "Selected chunks: manifest=%s created=%s count=%d types=%s "
+            "warnings=%s integrity=%s",
+            manifest_path,
+            _created,
+            len(loaded),
+            dict(Counter(chunk.chunk_type for chunk in loaded)),
+            manifest.get("warnings", []),
+            "verified" if expected is not None else "not_recorded",
+        )
+        if manifest.get("quality", {}).get("status") == "needs_review":
+            logger.warning(
+                "Chunk set requires review: %s quality=%s",
+                manifest_path,
+                manifest["quality"],
+            )
+        chunks.extend(loaded)
     return chunks
+
 
 
 class SearchIndex:
@@ -200,13 +268,16 @@ class SearchIndex:
         *,
         k1: float = 1.5,
         b: float = 0.75,
+        use_search_representation: bool = True,
     ) -> None:
         self.chunks = chunks
         self.k1 = k1
         self.b = b
+        self.use_search_representation = use_search_representation
         self._stemmer = snowballstemmer.stemmer("russian")
         self._tokens = [
-            self._normalize(_index_text(chunk)) for chunk in chunks
+            self._normalize(_index_text(chunk, use_search_representation))
+            for chunk in chunks
         ]
         self._toc = [_is_toc(chunk) for chunk in chunks]
         self._term_freqs = [Counter(tokens) for tokens in self._tokens]
@@ -228,7 +299,7 @@ class SearchIndex:
         return [self._stemmer.stemWord(term) for term in tokenize(text)]
 
     def _expand_terms(self, terms: list[str]) -> list[tuple[str, float]]:
-        """Add cheap prefix matches for Russian word forms the stemmer missed."""
+        """Add prefix matches for Russian word forms the stemmer missed."""
 
         expanded: dict[str, float] = {}
         for term in terms:
@@ -248,7 +319,9 @@ class SearchIndex:
                         break
                     prefix += 1
                 if prefix >= 4:
-                    expanded[candidate] = max(expanded.get(candidate, 0.0), 0.5)
+                    expanded[candidate] = max(
+                        expanded.get(candidate, 0.0), 0.5
+                    )
         return list(expanded.items())
 
     def search(
@@ -258,7 +331,11 @@ class SearchIndex:
         top_k: int = 4,
         min_score: float = 0.0,
     ) -> list[tuple[float, Chunk]]:
-        terms = self._normalize(query)
+        terms = self._normalize(
+            query_representation(query)
+            if self.use_search_representation
+            else query
+        )
         if not terms or not self.chunks or self._avg_length == 0:
             return []
 
@@ -292,6 +369,12 @@ class SearchIndex:
                     * (self.k1 + 1)
                     / denominator
                 )
+            if (
+                self.use_search_representation
+                and is_navigation(self.chunks[index])
+                and not re.search(r"оглавлен|содержани|contents", query, re.I)
+            ):
+                score *= 0.15
             if score > 0:
                 scored.append((score, self.chunks[index]))
 

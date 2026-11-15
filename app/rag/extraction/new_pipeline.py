@@ -17,7 +17,7 @@ document facts.
 from __future__ import annotations
 
 import json
-import re
+import shutil
 from collections import defaultdict
 from pathlib import Path
 
@@ -27,6 +27,8 @@ from docling.document_converter import DocumentConverter
 from app.rag.extraction import docling_parser as dp
 from app.rag.extraction import normalized as norm
 from app.rag.extraction import vision_parser as vp
+from app.rag.extraction.assets import register_asset
+from app.rag.extraction.quality import audit_analysis, should_fallback
 
 MAX_PROMPT_CHARS = 40_000
 MAX_BATCH_ELEMENTS = 30
@@ -73,7 +75,10 @@ def analyze_image(
     )
     retry_raw = vp.run_vision(retry_prompt, image_path)
     retry_analysis = vp.parse_json_object(retry_raw)
-    if isinstance(retry_analysis.get("items"), list) and retry_analysis["items"]:
+    if (
+        isinstance(retry_analysis.get("items"), list)
+        and retry_analysis["items"]
+    ):
         return retry_analysis, retry_raw
     return retry_analysis or analysis, retry_raw or raw
 
@@ -171,7 +176,9 @@ def analysis_item_text(item: dict) -> str:
         parts.append(_table_markdown(item.get("table")))
     if item_type == "diagram":
         parts.append(_diagram_text(item.get("diagram")))
-    if item_type in {"screenshot", "form"} and isinstance(item.get("ui"), dict):
+    if item_type in {"screenshot", "form"} and isinstance(
+        item.get("ui"), dict
+    ):
         parts.append(norm.flatten(item["ui"]))
     return "\n".join(part.strip() for part in parts if part and part.strip())
 
@@ -182,7 +189,9 @@ def analysis_item_data(item: dict) -> dict | None:
         return item["table"]
     if item_type == "diagram" and isinstance(item.get("diagram"), dict):
         return item["diagram"]
-    if item_type in {"screenshot", "form"} and isinstance(item.get("ui"), dict):
+    if item_type in {"screenshot", "form"} and isinstance(
+        item.get("ui"), dict
+    ):
         return item["ui"]
     return None
 
@@ -202,7 +211,9 @@ def _heading_like(item, text: str) -> bool:
     if label == "section_header":
         return True
     if label in {"text", "list_item"} and dp.HEADING_RE.match(text):
-        return len(text) <= 100 and not text.rstrip().endswith((".", "!", "?", ";"))
+        return len(text) <= 100 and not text.rstrip().endswith(
+            (".", "!", "?", ";")
+        )
     return False
 
 
@@ -216,8 +227,12 @@ def _add_analysis_items(
     asset_id: str,
     bbox: list[float] | None,
     fallback_text: str = "",
+    raw_response: str = "",
 ) -> int:
-    items = analysis.get("items") if isinstance(analysis, dict) else None
+    items, audit = audit_analysis(analysis, raw_response, page, asset_id)
+    nd.analysis_records.append(audit)
+    if audit["quality_status"] == "needs_review":
+        nd.warnings.append(f"page {page}: visual analysis needs review")
     added = 0
     if isinstance(items, list):
         for item in items:
@@ -275,7 +290,7 @@ def _add_analysis_items(
             section_path=section_path,
             parent_section_id=parent_section_id,
             source_regions=[{"page": page}],
-            origin="vision",
+            origin="docling",
         )
         added = 1
     return added
@@ -431,8 +446,7 @@ def build_from_pdf(
                 markdown = item.export_to_markdown(doc).strip()
                 columns = [cell.text.strip() for cell in grid[0]]
                 rows = [
-                    [cell.text.strip() for cell in row]
-                    for row in grid[1:]
+                    [cell.text.strip() for cell in row] for row in grid[1:]
                 ]
                 data = {"columns": columns, "rows": rows}
                 nd.add_structured(
@@ -484,6 +498,7 @@ def build_from_pdf(
                 elements_by_page[page] += 1
 
         seen_rects: dict[int, pymupdf.Rect] = {}
+        failed_pages: set[int] = set()
         for index, picture_data in enumerate(pictures):
             page_no = picture_data["page"]
             pdf_page = pdf_doc.load_page(page_no - 1)
@@ -499,12 +514,26 @@ def build_from_pdf(
             if image_path is None:
                 continue
             asset_id = f"asset-{page_no}-{index}"
+            register_asset(
+                nd.assets,
+                asset_id,
+                image_path,
+                temp_dir,
+                page_no,
+                (
+                    [target.x0, target.y0, target.x1, target.y1]
+                    if target is not None
+                    else None
+                ),
+            )
             analysis, raw = analyze_image(
                 image_path,
                 region_id=f"{document_id}:{page_no}:{index}",
                 mode="region",
                 page_text=pdf_page.get_text("text").strip()[:4000],
-                candidates=candidates_by_page.get(page_no, [])[:MAX_CANDIDATES],
+                candidates=candidates_by_page.get(page_no, [])[
+                    :MAX_CANDIDATES
+                ],
             )
             added = _add_analysis_items(
                 nd,
@@ -513,26 +542,37 @@ def build_from_pdf(
                 section_path=picture_data["section_path"],
                 parent_section_id=picture_data["parent_id"],
                 asset_id=asset_id,
-                bbox=[target.x0, target.y0, target.x1, target.y1]
-                if target
-                else None,
+                raw_response=raw,
+                bbox=(
+                    [target.x0, target.y0, target.x1, target.y1]
+                    if target
+                    else None
+                ),
             )
             if not added:
+                failed_pages.add(page_no)
                 warnings.append(
                     f"page {page_no}: picture analysis produced no items; "
                     f"raw={raw[:200]!r}"
                 )
 
         for page in sorted(selected):
-            if elements_by_page.get(page):
-                continue
-            if body_chars.get(page, 0) >= dp.MIN_PAGE_TEXT:
-                continue
-            if pictures_by_page.get(page) or tables_by_page.get(page):
+            if not should_fallback(
+                failed_visual=page in failed_pages,
+                has_elements=bool(elements_by_page.get(page)),
+                body_chars=body_chars.get(page, 0),
+                has_visual=bool(
+                    pictures_by_page.get(page) or tables_by_page.get(page)
+                ),
+                min_page_text=dp.MIN_PAGE_TEXT,
+            ):
                 continue
             pdf_page = pdf_doc.load_page(page - 1)
             image_path = temp_dir / f"page_{page:03d}_vision.png"
             pdf_page.get_pixmap(dpi=vp.DPI).save(image_path)
+            register_asset(
+                nd.assets, f"asset-{page}-page", image_path, temp_dir, page
+            )
             analysis, raw = analyze_image(
                 image_path,
                 region_id=f"{document_id}:{page}:page",
@@ -547,13 +587,16 @@ def build_from_pdf(
                 section_path=page_context.get(page, ("", 0))[0],
                 parent_section_id=None,
                 asset_id=f"asset-{page}-page",
+                raw_response=raw,
                 bbox=None,
                 fallback_text=vp.clean_content(
                     pdf_page.get_text("text").strip()
                 ),
             )
             if not added:
-                warnings.append(f"page {page}: vision fallback produced no items")
+                warnings.append(
+                    f"page {page}: vision fallback produced no items"
+                )
     finally:
         pdf_doc.close()
 
@@ -667,7 +710,10 @@ def build_from_image(
     """Build normalized elements for a standalone image upload."""
     nd = norm.NormalizedDocument()
     warnings: list[str] = []
-    analysis, _raw = analyze_image(
+    saved_image = temp_dir / ("source" + image_path.suffix.lower())
+    shutil.copyfile(image_path, saved_image)
+    register_asset(nd.assets, "asset-1-0", saved_image, temp_dir, 1)
+    analysis, raw = analyze_image(
         image_path,
         region_id=f"{document_id}:1:image",
         mode="region",
@@ -682,7 +728,7 @@ def build_from_image(
         parent_section_id=None,
         asset_id="asset-1-0",
         bbox=None,
-        fallback_text=image_path.name,
+        raw_response=raw,
     )
     if not added:
         warnings.append("image analysis produced no items")

@@ -12,7 +12,7 @@ would silently lose a document fact.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 ALLOWED_CHUNK_TYPES = {
@@ -114,12 +114,27 @@ class NormalizedDocument:
         self.sources: dict[str, SourcePayload] = {}
         self.source_order: dict[str, int] = {}
         self.warnings: list[str] = []
+        self.assets: dict[str, dict] = {}
+        self.analysis_records: list[dict] = []
         self._element_seq = 0
         self._source_seq = 0
 
     def next_element_id(self) -> str:
         self._element_seq += 1
         return f"e{self._element_seq}"
+
+    def to_dict(self) -> dict:
+        """Persist the evidence graph used by chunk source references."""
+        return {
+            "schema_version": 1,
+            "elements": [asdict(element) for element in self.elements],
+            "sources": {
+                key: asdict(value) for key, value in self.sources.items()
+            },
+            "assets": self.assets,
+            "analysis_records": self.analysis_records,
+            "warnings": self.warnings,
+        }
 
     def next_source_id(self) -> str:
         self._source_seq += 1
@@ -277,12 +292,15 @@ class NormalizedDocument:
                     return _rows_to_markdown(selected)
 
         self.warnings.append(
-            f"unsupported selector {kind!r} for source {source_id}; used full payload"
+            f"unsupported selector {kind!r} for source {source_id}; "
+            "used full payload"
         )
         return payload.text
 
     def _chunk_data(self, payloads: list[SourcePayload]) -> dict | None:
-        structured = [payload for payload in payloads if payload.data is not None]
+        structured = [
+            payload for payload in payloads if payload.data is not None
+        ]
         if not structured:
             return None
         if len(structured) == 1 and len(payloads) == 1:
@@ -347,7 +365,6 @@ class NormalizedDocument:
     ) -> list[dict]:
         resolved: list[dict] = []
         covered: set[str] = set()
-        used: set[str] = set()
         for index, raw in enumerate(raw_chunks):
             if not isinstance(raw, dict):
                 continue
@@ -376,8 +393,6 @@ class NormalizedDocument:
 
             primary_payloads = [self.sources[item] for item in primary_ids]
             context_payloads = [self.sources[item] for item in context_ids]
-            used.update(primary_ids)
-            used.update(context_ids)
             section_path = primary_payloads[0].section_path or ""
             parts: list[str] = []
             seen: set[str] = set()
@@ -395,11 +410,15 @@ class NormalizedDocument:
                     parts.append(text)
                     seen.add(payload.source_reference_id)
 
-            content = "\n\n".join(part.strip() for part in parts if part.strip())
+            content = "\n\n".join(
+                part.strip() for part in parts if part.strip()
+            )
             if section_path and section_path not in content:
                 content = f"{section_path}\n\n{content}".strip()
             if not content:
-                self.warnings.append(f"chunk {index} resolved to empty content")
+                self.warnings.append(
+                    f"chunk {index} resolved to empty content"
+                )
                 continue
 
             page = min(payload.page_from for payload in primary_payloads)
@@ -419,9 +438,15 @@ class NormalizedDocument:
                 self.source_order.get(payload.source_reference_id, 10**9)
                 for payload in primary_payloads
             )
-            covered.update(
-                payload.source_reference_id for payload in primary_payloads
-            )
+            covered.update(context_ids)
+            for payload in primary_payloads:
+                selector = selectors.get(payload.source_reference_id)
+                if not selector or selector.get("kind") in {
+                    None,
+                    "full",
+                    "table",
+                }:
+                    covered.add(payload.source_reference_id)
             resolved.append(
                 self._make_chunk(
                     index=index,
@@ -439,12 +464,14 @@ class NormalizedDocument:
                     content=content,
                     data=data,
                     order=order,
+                    source_ids=primary_ids + context_ids,
                 )
             )
-        if used:
+        if set(self.sources) - covered:
+            self.warnings.append("Recovered omitted or partial sources")
             resolved.extend(
                 self._missing_source_chunks(
-                    used,
+                    covered,
                     start_index=len(resolved),
                     source_name=source_name,
                     document_id=document_id,
@@ -483,8 +510,7 @@ class NormalizedDocument:
             ]
             if parts:
                 page = min(
-                    payload_page(self.sources, element)
-                    for element in buffer
+                    payload_page(self.sources, element) for element in buffer
                 )
                 page_to = max(
                     payload_page_to(self.sources, element)
@@ -520,6 +546,11 @@ class NormalizedDocument:
                         title=title,
                         content=content,
                         data=data,
+                        source_ids=[
+                            ref
+                            for el in buffer
+                            for ref in el.source_reference_ids
+                        ],
                         order=min(
                             self.source_order.get(ref, 10**9)
                             for element in buffer
@@ -568,12 +599,15 @@ class NormalizedDocument:
                             if payload.kind in ALLOWED_CHUNK_TYPES
                             else "mixed"
                         ),
-                        title=payload.section_path.split(" > ")[-1]
-                        if payload.section_path
-                        else "",
+                        title=(
+                            payload.section_path.split(" > ")[-1]
+                            if payload.section_path
+                            else ""
+                        ),
                         content=payload.text,
                         data=data,
                         order=self.source_order.get(source_id, 10**9),
+                        source_ids=[source_id],
                     )
                 )
         flush()
@@ -607,7 +641,9 @@ class NormalizedDocument:
             ]
             if parts:
                 page = min(payload_page(self.sources, el) for el in buffer)
-                page_to = max(payload_page_to(self.sources, el) for el in buffer)
+                page_to = max(
+                    payload_page_to(self.sources, el) for el in buffer
+                )
                 section_path = buffer[-1].section_path
                 chunks.append(
                     self._make_chunk(
@@ -620,13 +656,27 @@ class NormalizedDocument:
                         artifact_sha256=artifact_sha256,
                         page=page,
                         page_to=page_to,
-                        origin="docling",
+                        origin=self._chunk_origin(
+                            [
+                                self.sources[ref]
+                                for el in buffer
+                                for ref in el.source_reference_ids
+                                if ref in self.sources
+                            ]
+                        ),
                         chunk_type="text",
-                        title=section_path.split(" > ")[-1]
-                        if section_path
-                        else "",
+                        title=(
+                            section_path.split(" > ")[-1]
+                            if section_path
+                            else ""
+                        ),
                         content="\n\n".join(parts),
                         data=None,
+                        source_ids=[
+                            ref
+                            for el in buffer
+                            for ref in el.source_reference_ids
+                        ],
                         order=min(
                             self.source_order.get(ref, 10**9)
                             for element in buffer
@@ -676,12 +726,15 @@ class NormalizedDocument:
                             if payload.kind in ALLOWED_CHUNK_TYPES
                             else "mixed"
                         ),
-                        title=payload.section_path.split(" > ")[-1]
-                        if payload.section_path
-                        else "",
+                        title=(
+                            payload.section_path.split(" > ")[-1]
+                            if payload.section_path
+                            else ""
+                        ),
                         content=payload.text,
                         data=payload.data,
                         order=self.source_order.get(source_id, 10**9),
+                        source_ids=[source_id],
                     )
                 )
         flush()
@@ -705,9 +758,24 @@ class NormalizedDocument:
         content: str,
         data: dict | None,
         order: int = 10**9,
+        source_ids: list[str] | None = None,
     ) -> dict:
         chunk_id = f"{document_id}:{version_id}:p{page}:c{index}"
         search_text = build_search_text(title, content, data)
+        source_ids = list(dict.fromkeys(source_ids or []))
+        elements = [
+            el
+            for el in self.elements
+            if set(el.source_reference_ids) & set(source_ids)
+        ]
+        asset_ids = list(
+            dict.fromkeys(
+                asset
+                for ref in source_ids
+                if ref in self.sources
+                for asset in self.sources[ref].asset_ids
+            )
+        )
         return {
             "id": chunk_id,
             "source": source_name,
@@ -725,12 +793,23 @@ class NormalizedDocument:
             "content": content,
             "data": data,
             "text": search_text,
+            "source_reference_ids": source_ids,
+            "element_ids": [el.element_id for el in elements],
+            "source_regions": [
+                region for el in elements for region in el.source_regions
+            ],
+            "asset_ids": asset_ids,
+            "assets": [
+                self.assets[key] for key in asset_ids if key in self.assets
+            ],
             "locator": {"kind": "pdf-page", "value": page},
             "_order": order,
         }
 
 
-def payload_page(sources: dict[str, SourcePayload], element: NormalizedElement) -> int:
+def payload_page(
+    sources: dict[str, SourcePayload], element: NormalizedElement
+) -> int:
     pages = [
         sources[ref].page_from
         for ref in element.source_reference_ids
@@ -809,8 +888,10 @@ def _merge_sibling_text_chunks(
             <= max_chars
         ):
             previous["content"] = (
-                f"{previous['content'].rstrip()}\n\n{chunk['content'].lstrip()}"
+                f"{previous['content'].rstrip()}\n\n"
+                f"{chunk['content'].lstrip()}"
             )
+            merge_evidence(previous, chunk)
             continue
         merged.append(chunk)
     return merged
@@ -834,6 +915,8 @@ def finalize_chunks(
             pending.append(chunk)
             continue
         if pending:
+            for heading_chunk in pending:
+                merge_evidence(chunk, heading_chunk)
             heading = str(pending[0].get("content") or "").strip()
             if not chunk.get("title"):
                 chunk["title"] = heading
@@ -867,13 +950,28 @@ def finalize_chunks(
     return split
 
 
+def merge_evidence(target: dict, source: dict) -> None:
+    """Keep evidence when text/heading chunks are merged."""
+    for key in (
+        "asset_ids",
+        "assets",
+        "source_reference_ids",
+        "element_ids",
+        "source_regions",
+    ):
+        values = list(target.get(key) or [])
+        for value in source.get(key) or []:
+            if value not in values:
+                values.append(value)
+        target[key] = values
+
+
 def _rows_to_markdown(rows: list[list[str]]) -> str:
     if not rows:
         return ""
     width = max(len(row) for row in rows)
     normalized = [
-        [str(cell) for cell in row] + [""] * (width - len(row))
-        for row in rows
+        [str(cell) for cell in row] + [""] * (width - len(row)) for row in rows
     ]
     header = normalized[0]
     lines = [

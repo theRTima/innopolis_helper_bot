@@ -69,6 +69,9 @@ async def run() -> int:
         reasoning_effort=settings.llm_answer_reasoning_effort,
         max_tokens=settings.answer_max_tokens,
         temperature=settings.temperature,
+        enable_thinking=settings.llm_enable_thinking,
+        thinking_budget=settings.llm_thinking_budget,
+        max_completion_tokens=settings.answer_max_completion_tokens,
     )
 
     bot = Bot(
@@ -88,7 +91,10 @@ async def run() -> int:
             settings=settings,
         )
     except TelegramUnauthorizedError:
-        print("Telegram отклонил токен. Проверьте TELEGRAM_BOT_TOKEN.", file=sys.stderr)
+        print(
+            "Telegram отклонил токен. Проверьте TELEGRAM_BOT_TOKEN.",
+            file=sys.stderr,
+        )
         return 1
     finally:
         await database.close()

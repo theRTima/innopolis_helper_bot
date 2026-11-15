@@ -15,6 +15,7 @@ from app.bot.keyboards import feedback_keyboard
 from app.config import Settings
 from app.llm.client import LLMClient
 from app.rag.index import Chunk, SearchIndex
+from app.rag.retrieve import retrieve_context
 from app.storage.db import Database
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,9 @@ LLM_ERROR_MESSAGE = (
 MAX_MESSAGE_LENGTH = 3600
 
 
-def _format_sources(results: list[tuple[float, Chunk]], cited: set[int] | None = None) -> str:
+def _format_sources(
+    results: list[tuple[float, Chunk]], cited: set[int] | None = None
+) -> str:
     if not results:
         return ""
     lines = "\n".join(
@@ -104,7 +107,8 @@ async def handle_question(
         chat_id=message.chat.id,
         action=ChatAction.TYPING,
     )
-    results = index.search(
+    results = retrieve_context(
+        index,
         question,
         top_k=settings.top_k,
         min_score=settings.min_score,

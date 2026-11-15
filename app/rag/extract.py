@@ -2,7 +2,7 @@
 
 The source of truth is the immutable version created by ``app.rag.ingest``.
 Rendering is optional and is used for Office documents and for visual
-fallbacks.  Chunks are written next to the version with their own manifest and
+fallbacks. Chunks are written next to the version with their own manifest and
 cache key, so extraction can be rerun safely.
 """
 
@@ -21,10 +21,12 @@ from pathlib import Path
 from app.rag.extraction import new_pipeline
 from app.rag.extraction import normalized as norm
 from app.rag.extraction import vision_parser as vp
+from app.rag.extraction.assets import verify_assets
+from app.rag.extraction.quality import coverage_report
 from app.rag.ingest import sha256_file
 from app.rag.render import RenderError
 
-PIPELINE_VERSION = 1
+PIPELINE_VERSION = 3
 MAX_TOKENS_TARGET = 600
 SUPPORTED_FORMATS = {"pdf", "docx", "xlsx", "pptx", "image", "text"}
 OFFICE_FORMATS = {"docx", "xlsx", "pptx"}
@@ -109,9 +111,7 @@ def latest_render(
     return directory, manifest
 
 
-def choose_artifact(
-    version: Path, manifest: dict
-) -> tuple[Path, str, str]:
+def choose_artifact(version: Path, manifest: dict) -> tuple[Path, str, str]:
     """Return artifact path, format and a stable artifact kind."""
     file_format = manifest.get("format", "pdf")
     if file_format not in SUPPORTED_FORMATS:
@@ -168,7 +168,9 @@ def extract_version(
         raise ExtractionError("Stored original is missing.")
     source_sha256 = sha256_file(original)
     if source_sha256 != manifest["sha256"]:
-        raise ExtractionError("Stored original SHA-256 does not match manifest.")
+        raise ExtractionError(
+            "Stored original SHA-256 does not match manifest."
+        )
 
     artifact, file_format, artifact_kind = choose_artifact(version, manifest)
     if not artifact.is_file():
@@ -214,14 +216,21 @@ def extract_version(
                 or cached.get("configuration") != config
             ):
                 raise ExtractionError(
-                    "Cached chunk manifest does not match source/configuration."
+                    "Cached chunk manifest does not match "
+                    "source/configuration."
                 )
             chunks_file = destination / "chunks.jsonl"
-            if (
-                not chunks_file.is_file()
-                or sha256_file(chunks_file) != cached.get("chunks_sha256")
-            ):
+            if not chunks_file.is_file() or sha256_file(
+                chunks_file
+            ) != cached.get("chunks_sha256"):
                 raise ExtractionError("Cached chunks are damaged.")
+            verify_assets(destination, cached.get("assets", []))
+            if (
+                cached.get("normalized_sha256")
+                and sha256_file(destination / "normalized.json")
+                != cached["normalized_sha256"]
+            ):
+                raise ExtractionError("Normalized evidence checksum mismatch")
             return {
                 "cached": True,
                 "chunk_path": str(destination),
@@ -302,18 +311,27 @@ def extract_version(
                 document_id=manifest["document_id"],
                 version_id=manifest["version_id"],
             )
-            shutil.rmtree(temp_images, ignore_errors=True)
+            assets = list(nd.assets.values()) if file_format != "text" else []
+            if file_format != "text":
+                (stage / "normalized.json").write_text(
+                    json.dumps(nd.to_dict(), ensure_ascii=False, indent=2)
+                    + "\n",
+                    encoding="utf-8",
+                )
+            verify_assets(stage, assets)
+            if not assets:
+                shutil.rmtree(temp_images, ignore_errors=True)
             if sha256_file(original) != source_sha256:
                 raise ExtractionError("Source changed during extraction.")
             if sha256_file(artifact) != artifact_sha256:
-                raise ExtractionError("Extraction artifact changed during extraction.")
+                raise ExtractionError(
+                    "Extraction artifact changed during extraction."
+                )
 
             chunks_file = stage / "chunks.jsonl"
             with chunks_file.open("w", encoding="utf-8") as handle:
                 for chunk in chunks:
-                    handle.write(
-                        json.dumps(chunk, ensure_ascii=False) + "\n"
-                    )
+                    handle.write(json.dumps(chunk, ensure_ascii=False) + "\n")
             _write_markdown(chunks, stage / "chunks.md")
 
             counts: dict[str, int] = {}
@@ -341,7 +359,23 @@ def extract_version(
                 "chunks_path": "chunks.jsonl",
                 "preview_path": "chunks.md",
                 "chunks_sha256": sha256_file(chunks_file),
+                "assets": assets,
+                "quality": (
+                    coverage_report(nd, chunks, warnings)
+                    if file_format != "text"
+                    else {
+                        "status": (
+                            "passed_checks" if chunks else "needs_review"
+                        ),
+                        "scope": "Text chunking only",
+                    }
+                ),
             }
+            if file_format != "text":
+                chunk_manifest["normalized_path"] = "normalized.json"
+                chunk_manifest["normalized_sha256"] = sha256_file(
+                    stage / "normalized.json"
+                )
             if review_markdown and file_format not in {"text"}:
                 try:
                     review_prompt = vp.env.get_template(
@@ -355,6 +389,12 @@ def extract_version(
                         chunk_manifest["review_path"] = "review.md"
                 except Exception as exc:  # review is optional
                     warnings.append(f"review markdown failed: {exc}")
+            # Include optional-review failures in the final quality summary.
+            chunk_manifest["quality"] = (
+                coverage_report(nd, chunks, warnings)
+                if file_format != "text"
+                else chunk_manifest["quality"]
+            )
             (stage / "chunk_manifest.json").write_text(
                 json.dumps(chunk_manifest, ensure_ascii=False, indent=2)
                 + "\n",
@@ -381,11 +421,11 @@ def extract_all(
     for manifest_path in sorted(root.glob("*/sha256-*/manifest.json")):
         version = manifest_path.parent
         try:
-            results.append(extract_version(version, target_tokens=target_tokens))
-        except (ExtractionError, RenderError, OSError, ValueError) as exc:
-            errors.append(
-                {"version_path": str(version), "error": str(exc)}
+            results.append(
+                extract_version(version, target_tokens=target_tokens)
             )
+        except (ExtractionError, RenderError, OSError, ValueError) as exc:
+            errors.append({"version_path": str(version), "error": str(exc)})
     return {
         "status": "partial_failure" if errors else "ready",
         "results": results,
@@ -429,7 +469,10 @@ def main() -> int:
     parser.add_argument(
         "--review-markdown",
         action="store_true",
-        help="Also ask the model to render normalized elements as review Markdown",
+        help=(
+            "Also ask the model to render normalized elements "
+            "as review Markdown"
+        ),
     )
     args = parser.parse_args()
 
@@ -438,9 +481,7 @@ def main() -> int:
             result = extract_all(
                 args.storage_root, target_tokens=args.target_tokens
             )
-            print(
-                json.dumps(result, ensure_ascii=False, indent=2)
-            )
+            print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0 if result["status"] == "ready" else 1
         if args.version_path is None:
             parser.error("version_path is required unless --all is used")
