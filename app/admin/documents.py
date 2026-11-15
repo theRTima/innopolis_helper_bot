@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import secrets
 from datetime import datetime
@@ -13,7 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.storage.models import DocumentImportJob
+from app.storage.models import DocumentImportJob, DocumentVersion
 
 MAX_DOCUMENT_BYTES = 50 * 1024 * 1024
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx"}
@@ -62,7 +63,11 @@ def register_document_routes(
             "<tr><td>" + str(job.id) + "</td><td>" + html.escape(job.title)
             + "</td><td>" + html.escape(job.original_name) + "</td><td>"
             + html.escape(job.status) + "</td><td>"
-            + html.escape(job.error or "") + "</td><td>"
+            + str(job.progress_percent) + "%"
+            + (f" ({job.progress_current}/{job.progress_total})"
+               if job.progress_total else "")
+            + "</td><td>" + html.escape(job.progress_stage or "")
+            + "</td><td>" + html.escape(job.error or "") + "</td><td>"
             + (job.created_at.isoformat() if isinstance(job.created_at, datetime) else "")
             + "</td></tr>"
             for job in jobs
@@ -77,8 +82,9 @@ def register_document_routes(
             '<button type="submit">Upload and queue</button></form>'
             '<p><a href="/admin/">Back to administration</a></p>'
             "<h2>Recent uploads</h2><table><thead><tr><th>ID</th><th>Title</th>"
-            "<th>File</th><th>Status</th><th>Error</th><th>Submitted</th></tr></thead>"
-            "<tbody>" + (rows or '<tr><td colspan="6">No uploads yet</td></tr>')
+            "<th>File</th><th>Status</th><th>Progress</th><th>Stage</th>"
+            "<th>Error</th><th>Submitted</th></tr></thead>"
+            "<tbody>" + (rows or '<tr><td colspan="8">No uploads yet</td></tr>')
             + "</tbody></table>"
         )
         return _page("Document uploads", body, message=message)
@@ -105,23 +111,53 @@ def register_document_routes(
         job_dir.mkdir(mode=0o700)
         staged_path = job_dir / original_name
         size = 0
+        digest = hashlib.sha256()
         try:
             with staged_path.open("xb") as output:
                 while block := await document.read(1024 * 1024):
                     size += len(block)
                     if size > MAX_DOCUMENT_BYTES:
                         raise ValueError("File exceeds the 50 MiB limit")
+                    digest.update(block)
                     output.write(block)
             if not size:
                 raise ValueError("File is empty")
+            checksum = digest.hexdigest()
+            duplicate = False
             async with sessions() as session, session.begin():
-                session.add(
-                    DocumentImportJob(
-                        document_id=document_id,
-                        title=title,
-                        original_name=original_name[:500],
-                        storage_path=str(staged_path),
+                duplicate = bool(await session.scalar(
+                    select(DocumentVersion.id)
+                    .where(DocumentVersion.checksum_sha256 == checksum)
+                    .limit(1)
+                ))
+                if not duplicate:
+                    duplicate = bool(await session.scalar(
+                        select(DocumentImportJob.id)
+                        .where(
+                            DocumentImportJob.checksum_sha256 == checksum,
+                            DocumentImportJob.status.in_(
+                                ("queued", "processing", "completed")
+                            ),
+                        )
+                        .limit(1)
+                    ))
+                if not duplicate:
+                    session.add(
+                        DocumentImportJob(
+                            document_id=document_id,
+                            title=title,
+                            original_name=original_name[:500],
+                            storage_path=str(staged_path),
+                            checksum_sha256=checksum,
+                        )
                     )
+            if duplicate:
+                staged_path.unlink(missing_ok=True)
+                job_dir.rmdir()
+                return RedirectResponse(
+                    "/documents/upload?message="
+                    + quote("Same file already exists."),
+                    status_code=303,
                 )
         except (OSError, ValueError) as error:
             staged_path.unlink(missing_ok=True)

@@ -211,6 +211,17 @@ The worker processes **one document at a time**. Large files can take a long
 time, and later uploads remain `queued` until the current job finishes. This is
 normal.
 
+The queue rejects a file whose SHA-256 checksum matches an existing document
+version or a queued, processing or completed upload. The form reports:
+
+```text
+Same file already exists.
+```
+
+Each queue row shows status, progress percentage, current/total work units and
+the current stage (`ingest`, `render`, `image analysis`, `chunking` or
+`completed`).
+
 #### Process files from `data/knowledge`
 
 The batch scanner discovers all PDFs in `data/knowledge/`. It does not scan

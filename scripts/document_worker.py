@@ -32,17 +32,31 @@ DOCUMENTS_ROOT = Path(os.getenv("DOCUMENTS_DIR", "data/processed/documents"))
 POLL_SECONDS = max(1, int(os.getenv("DOCUMENT_WORKER_POLL_SECONDS", "3")))
 
 
-def run_pipeline(source: Path, document_id: str) -> tuple[dict, dict, dict, dict[str, int]]:
+def run_pipeline(
+    source: Path,
+    document_id: str,
+    progress=None,
+) -> tuple[dict, dict, dict, dict[str, int]]:
     started = time.monotonic()
+    if progress is not None:
+        progress("ingest", 0, 1)
     stage_started = time.monotonic()
     ingested = ingest_document(source, document_id, storage_root=DOCUMENTS_ROOT)
     ingest_ms = round((time.monotonic() - stage_started) * 1000)
+    if progress is not None:
+        progress("ingest", 1, 1)
     version_path = Path(ingested["version_path"])
     stage_started = time.monotonic()
+    if progress is not None:
+        progress("render", 0, 1)
     rendered = render_version(version_path)
     render_ms = round((time.monotonic() - stage_started) * 1000)
+    if progress is not None:
+        progress("render", 1, 1)
     stage_started = time.monotonic()
-    extracted = extract_version(version_path)
+    extracted = extract_version(
+        version_path, progress_callback=progress
+    )
     extract_ms = round((time.monotonic() - stage_started) * 1000)
     return ingested, rendered, extracted, {
         "ingest_ms": ingest_ms,
@@ -50,6 +64,34 @@ def run_pipeline(source: Path, document_id: str) -> tuple[dict, dict, dict, dict
         "extract_ms": extract_ms,
         "total_ms": round((time.monotonic() - started) * 1000),
     }
+
+
+def progress_percent(stage: str, current: int, total: int) -> int:
+    base, span = {
+        "ingest": (0, 5),
+        "render": (5, 5),
+        "image analysis": (10, 80),
+        "chunking": (90, 9),
+    }.get(stage, (0, 1))
+    if total <= 0:
+        return min(99, base + span)
+    return max(
+        0, min(99, base + round(span * min(current, total) / total))
+    )
+
+
+async def update_progress(
+    sessions, job_id: int, stage: str, current: int, total: int
+) -> None:
+    percent = progress_percent(stage, current, total)
+    async with sessions() as session, session.begin():
+        job = await session.get(DocumentImportJob, job_id)
+        if job is None or job.status != "processing":
+            return
+        job.progress_stage = stage
+        job.progress_current = current
+        job.progress_total = total
+        job.progress_percent = percent
 
 
 async def save_success(sessions, job_id: int, title: str, result: tuple) -> None:
@@ -112,6 +154,10 @@ async def save_success(sessions, job_id: int, title: str, result: tuple) -> None
         )
         job.status = "completed"
         job.error = None
+        job.progress_percent = 100
+        if job.progress_total:
+            job.progress_current = job.progress_total
+        job.progress_stage = "completed"
         job.finished_at = datetime.now(timezone.utc)
 
 
@@ -121,6 +167,7 @@ async def set_failed(sessions, job_id: int, error: Exception) -> None:
         if job is not None:
             job.status = "failed"
             job.error = str(error)[-4000:]
+            job.progress_stage = "failed"
             job.finished_at = datetime.now(timezone.utc)
 
 
@@ -138,6 +185,10 @@ async def claim_job(sessions) -> DocumentImportJob | None:
         job.status = "processing"
         job.started_at = datetime.now(timezone.utc)
         job.error = None
+        job.progress_percent = 0
+        job.progress_current = 0
+        job.progress_total = 0
+        job.progress_stage = "starting"
         await session.flush()
         return DocumentImportJob(
             id=job.id,
@@ -169,9 +220,18 @@ async def main() -> None:
                     continue
                 source = Path(job.storage_path)
                 logger.info("Processing upload job=%s name=%s", job.id, job.original_name)
+                loop = asyncio.get_running_loop()
+
+                def report(stage, current, total):
+                    loop.call_soon_threadsafe(
+                        lambda s=stage, c=current, t=total: asyncio.create_task(
+                            update_progress(sessions, job.id, s, c, t)
+                        )
+                    )
+
                 try:
                     result = await asyncio.to_thread(
-                        run_pipeline, source, job.document_id
+                        run_pipeline, source, job.document_id, report
                     )
                     await save_success(sessions, job.id, job.title, result)
                     logger.info("Completed upload job=%s", job.id)

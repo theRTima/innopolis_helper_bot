@@ -56,6 +56,9 @@ async def main() -> None:
                 "GRANT SELECT, INSERT ON document_import_jobs TO bot_admin_access"
             )
             await connection.execute(
+                "GRANT SELECT ON document_versions TO bot_admin_access"
+            )
+            await connection.execute(
                 "GRANT USAGE, SELECT ON SEQUENCE allowed_telegram_users_id_seq, "
                 "access_invites_id_seq, document_import_jobs_id_seq TO bot_admin_access"
             )

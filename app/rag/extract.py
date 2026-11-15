@@ -15,6 +15,7 @@ import json
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -149,6 +150,7 @@ def extract_version(
     target_tokens: int = MAX_TOKENS_TARGET,
     pages_spec: str | None = None,
     review_markdown: bool = False,
+    progress_callback: Callable[[str, int, int], None] | None = None,
 ) -> dict:
     version = Path(version_path).resolve()
     try:
@@ -247,6 +249,8 @@ def extract_version(
             temp_images.mkdir()
 
             if file_format == "text":
+                if progress_callback is not None:
+                    progress_callback("chunking", 0, 1)
                 text = _decode_text(artifact, manifest)
                 chunks = new_pipeline.build_from_text(
                     text,
@@ -258,14 +262,20 @@ def extract_version(
                 )
                 for chunk in chunks:
                     chunk["artifact_sha256"] = artifact_sha256
+                if progress_callback is not None:
+                    progress_callback("chunking", 1, 1)
             else:
                 if file_format == "image":
+                    if progress_callback is not None:
+                        progress_callback("image analysis", 0, 1)
                     nd, build_warnings = new_pipeline.build_from_image(
                         artifact,
                         document_id=manifest["document_id"],
                         version_id=manifest["version_id"],
                         temp_dir=temp_images,
                     )
+                    if progress_callback is not None:
+                        progress_callback("image analysis", 1, 1)
                 else:
                     nd, build_warnings = new_pipeline.build_from_pdf(
                         artifact,
@@ -273,6 +283,7 @@ def extract_version(
                         version_id=manifest["version_id"],
                         temp_dir=temp_images,
                         pages_spec=pages_spec,
+                        progress=progress_callback,
                     )
                 warnings.extend(build_warnings)
                 raw_chunks, chunk_warnings = new_pipeline.chunk_elements(
@@ -280,6 +291,7 @@ def extract_version(
                     document_id=manifest["document_id"],
                     version_id=manifest["version_id"],
                     target_tokens=target_tokens,
+                    progress=progress_callback,
                 )
                 warnings.extend(chunk_warnings)
                 chunks = nd.resolve_chunks(

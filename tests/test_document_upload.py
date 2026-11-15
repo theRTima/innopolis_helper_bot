@@ -13,13 +13,15 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 pytest.importorskip("python_multipart")
 
 from app.admin.documents import register_document_routes
-from app.storage.models import DocumentImportJob
+from app.storage.models import Document, DocumentImportJob, DocumentVersion
 
 
 def test_upload_creates_queued_job_and_stages_file(tmp_path):
     async def scenario():
         engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'uploads.sqlite3'}")
         async with engine.begin() as connection:
+            await connection.run_sync(Document.__table__.create)
+            await connection.run_sync(DocumentVersion.__table__.create)
             await connection.run_sync(DocumentImportJob.__table__.create)
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         app = FastAPI()
@@ -33,15 +35,27 @@ def test_upload_creates_queued_job_and_stages_file(tmp_path):
                 files={"document": ("registry.pdf", b"%PDF-1.7 test", "application/pdf")},
                 follow_redirects=False,
             )
+            duplicate = client.post(
+                "/documents/upload",
+                data={"title": "Furniture registry copy"},
+                files={"document": ("registry-copy.pdf", b"%PDF-1.7 test", "application/pdf")},
+                follow_redirects=False,
+            )
         assert response.status_code == 303
+        assert duplicate.status_code == 303
+        assert "Same%20file%20already%20exists" in duplicate.headers["location"]
         async with sessions() as session:
-            job = await session.scalar(select(DocumentImportJob))
-            assert job is not None
+            jobs = list((await session.scalars(select(DocumentImportJob))).all())
+            assert len(jobs) == 1
+            job = jobs[0]
             assert job.title == "Furniture registry"
             assert job.original_name == "registry.pdf"
             assert job.status == "queued"
+            assert job.checksum_sha256
+            assert job.progress_percent == 0
             staged = inbox / job.document_id / "registry.pdf"
             assert staged.read_bytes() == b"%PDF-1.7 test"
+            assert len([p for p in inbox.iterdir() if p.is_dir()]) == 1
         await engine.dispose()
 
     asyncio.run(scenario())

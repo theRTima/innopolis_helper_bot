@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import shutil
 from collections import defaultdict
+from collections.abc import Callable
 from pathlib import Path
 
 import pymupdf
@@ -343,6 +344,7 @@ def build_from_pdf(
     version_id: str,
     temp_dir: Path,
     pages_spec: str | None = None,
+    progress: Callable[[str, int, int], None] | None = None,
 ) -> tuple[norm.NormalizedDocument, list[str]]:
     """Build normalized elements from a PDF or a rendered Office PDF."""
     pdf_path = Path(pdf_path).resolve()
@@ -499,6 +501,10 @@ def build_from_pdf(
 
         seen_rects: dict[int, pymupdf.Rect] = {}
         failed_pages: set[int] = set()
+        total_units = len(pictures) + len(selected)
+        processed_units = 0
+        if progress is not None:
+            progress("image analysis", 0, total_units)
         for index, picture_data in enumerate(pictures):
             page_no = picture_data["page"]
             pdf_page = pdf_doc.load_page(page_no - 1)
@@ -512,6 +518,9 @@ def build_from_pdf(
                 seen_rects,
             )
             if image_path is None:
+                processed_units += 1
+                if progress is not None:
+                    progress("image analysis", processed_units, total_units)
                 continue
             asset_id = f"asset-{page_no}-{index}"
             register_asset(
@@ -555,6 +564,9 @@ def build_from_pdf(
                     f"page {page_no}: picture analysis produced no items; "
                     f"raw={raw[:200]!r}"
                 )
+            processed_units += 1
+            if progress is not None:
+                progress("image analysis", processed_units, total_units)
 
         for page in sorted(selected):
             if not should_fallback(
@@ -597,9 +609,14 @@ def build_from_pdf(
                 warnings.append(
                     f"page {page}: vision fallback produced no items"
                 )
+            processed_units += 1
+            if progress is not None:
+                progress("image analysis", processed_units, total_units)
     finally:
         pdf_doc.close()
 
+    if progress is not None:
+        progress("image analysis", total_units, total_units)
     return nd, warnings
 
 
@@ -646,6 +663,7 @@ def chunk_elements(
     document_id: str,
     version_id: str,
     target_tokens: int = 600,
+    progress: Callable[[str, int, int], None] | None = None,
 ) -> tuple[list[dict], list[str]]:
     """Ask the model to group normalized element references per page."""
     warnings: list[str] = []
@@ -666,8 +684,14 @@ def chunk_elements(
     if current:
         pages.append(current)
 
-    for page_elements in pages:
-        for batch in batch_elements(page_elements):
+    page_batches = [batch_elements(page_elements) for page_elements in pages]
+    total_batches = sum(len(batches) for batches in page_batches)
+    processed_batches = 0
+    if progress is not None:
+        progress("chunking", 0, total_batches)
+
+    for batches in page_batches:
+        for batch in batches:
             prompt = vp.normalized_chunker_prompt.render(
                 document_id=document_id,
                 version_id=version_id,
@@ -697,6 +721,9 @@ def chunk_elements(
                         f"{unresolved.get('source_reference_id')}: "
                         f"{unresolved.get('issue', '')}"
                     )
+            processed_batches += 1
+            if progress is not None:
+                progress("chunking", processed_batches, total_batches)
     return raw_chunks, warnings
 
 
