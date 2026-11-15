@@ -66,6 +66,28 @@ services:
       timeout: 5s
       retries: 3
 
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    image: innopolis-helper-bot-admin:local
+    profiles: ["admin"]
+    restart: unless-stopped
+    env_file: ./storage/admin.env
+    environment:
+      ADMIN_DATABASE_HOST: postgres
+      ADMIN_DATABASE_PORT: "5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-8001}:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 2).close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
   grafana:
     image: grafana/grafana:12.2.0
     restart: unless-stopped
