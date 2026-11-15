@@ -11,6 +11,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramUnauthorizedError
 
 from app.bot.handlers import router
+from app.bot.access import UsernameWhitelistMiddleware
 from app.config import Settings
 from app.llm.client import LLMClient
 from app.rag.index import SearchIndex, load_flat_chunks, load_versioned_chunks
@@ -47,9 +48,7 @@ async def run() -> int:
         )
         return 1
 
-    pdf_sources = {
-        path.stem for path in settings.knowledge_dir.glob("*.pdf")
-    }
+    pdf_sources = {path.stem for path in settings.knowledge_dir.glob("*.pdf")}
     chunk_sources = {chunk.document for chunk in chunks}
     missing = sorted(pdf_sources - chunk_sources)
     if missing:
@@ -83,6 +82,11 @@ async def run() -> int:
         default=DefaultBotProperties(link_preview_is_disabled=True),
     )
     dispatcher = Dispatcher()
+    whitelist = UsernameWhitelistMiddleware(
+        settings.telegram_allowed_usernames
+    )
+    dispatcher.message.outer_middleware(whitelist)
+    dispatcher.callback_query.outer_middleware(whitelist)
     dispatcher.include_router(router)
 
     try:
