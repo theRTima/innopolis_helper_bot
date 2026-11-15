@@ -37,19 +37,19 @@ class CleanAdminSite(AdminSite):
         app.header = None
         app.footer = None
         app.cssVars = {
-            "--Layout-aside-bg": "#fafbfc",
-            "--Layout-aside-color": "#465268",
+            "--Layout-aside-bg": "#eef3fb",
+            "--Layout-aside-color": "#3f4c63",
             "--Layout-asideLink-color": "#465268",
-            "--Layout-asideLink-iconColor": "#5b6b85",
+            "--Layout-asideLink-iconColor": "#607089",
             "--Layout-asideLink-onHover-color": "#172033",
             "--Layout-asideLink-onHover-iconColor": "#244ce0",
-            "--Layout-aside-onHover-bg": "#eef3fb",
+            "--Layout-aside-onHover-bg": "#e2e9f6",
             "--Layout-asideLink-onActive-color": "#244ce0",
-            "--Layout-aside-onAcitve-bg": "#e4ebff",
-            "--Layout-aside-subList-bg": "#f1f5fa",
-            "--Layout-asideLabel-color": "#7b879c",
-            "--Layout-asideDivider-bg": "#e3e8f0",
-            "--Layout-brand-bg": "#fafbfc",
+            "--Layout-aside-onAcitve-bg": "#d6e3ff",
+            "--Layout-aside-subList-bg": "#e7eef9",
+            "--Layout-asideLabel-color": "#6f7d92",
+            "--Layout-asideDivider-bg": "#d9e2ef",
+            "--Layout-brand-bg": "#eef3fb",
             "--Layout-brand-color": "#172033",
             "--Layout-brandBar-color": "#172033",
         }
