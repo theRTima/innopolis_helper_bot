@@ -114,12 +114,15 @@ See `docs/answer-latency.md` for measurements and provider constraints.
 The project uses one document workflow: every source is stored as an immutable
 version, rendered when needed, and extracted into versioned chunks.
 
+The examples use `travel.pdf` and `furniture.pdf` as placeholders. Replace them
+with the actual files under `data/knowledge/`.
+
 ### Pipeline
 
 ```bash
 # 1. Store an immutable version
 .venv/bin/python -m app.rag.ingest \
-  "data/knowledge/БП Командировка.pdf" \
+  "data/knowledge/travel.pdf" \
   --document-id travel
 
 # 2. Render a preview (optional for PDF, required for Office)
@@ -162,11 +165,11 @@ Use the `app.rag` module paths or the console scripts instead. If you see
 
 ### Add another PDF
 
-For example, to add `Реестр мебели.pdf`:
+For example, to add `furniture.pdf`:
 
 ```bash
 .venv/bin/python -m app.rag.ingest \
-  "data/knowledge/Реестр мебели.pdf" \
+  "data/knowledge/furniture.pdf" \
   --document-id furniture
 ```
 
@@ -212,15 +215,34 @@ If a PDF in `KNOWLEDGE_DIR` has no versioned chunks, it is skipped with a
 warning and remains unavailable to the bot. At least one ready versioned chunk
 set is required for startup.
 
-## Docker Compose
+## Docker launch
 
-The included Compose stack provides:
+To run the bot, viewer and database in containers, use this section instead of
+the manual Python setup above. The Compose stack provides:
 
 - `postgres` — database
 - `bot` — Telegram polling process
 - `viewer` — signed document viewer on loopback
 - `ingest` — one-shot versioned pipeline (`ingest -> render -> extract`)
 - `llama` — optional local llama.cpp server under the `llm` profile
+
+Start by creating the environment file:
+
+```bash
+cp .env.example .env
+```
+
+Set at least:
+
+```env
+TELEGRAM_BOT_TOKEN=...
+LLM_BASE_URL=https://your-provider.example.com/v1
+LLM_MODEL=your-multimodal-model-id
+LLM_API_KEY=your-api-key
+POSTGRES_PASSWORD=change-me
+INGEST_SOURCE=/app/data/knowledge/travel.pdf
+INGEST_DOCUMENT_ID=travel
+```
 
 Docker files:
 
@@ -231,14 +253,6 @@ docker-compose.yaml
 .dockerignore
 ```
 
-Prepare `.env`:
-
-```env
-POSTGRES_PASSWORD=change-me
-INGEST_SOURCE=/app/data/knowledge/БП Командировка.pdf
-INGEST_DOCUMENT_ID=travel
-```
-
 Build and start:
 
 ```bash
@@ -247,7 +261,7 @@ docker compose --profile ingest build
 docker compose up -d postgres bot viewer
 ```
 
-Run ingestion for one file:
+Run ingestion for the configured file:
 
 ```bash
 docker compose --profile ingest run --rm ingest
@@ -257,7 +271,7 @@ Or override the source and document ID:
 
 ```bash
 docker compose --profile ingest run --rm ingest \
-  --source /app/data/knowledge/Реестр мебели.pdf \
+  --source /app/data/knowledge/furniture.pdf \
   --document-id furniture
 ```
 
@@ -397,7 +411,7 @@ data/processed/documents/<document-id>/sha256-<hash>/
 ```json
 {
   "id": "travel:sha256-...:p7:c2",
-  "source": "БП Командировка.pdf",
+  "source": "travel.pdf",
   "document_id": "travel",
   "version_id": "sha256-...",
   "page": 7,
@@ -405,7 +419,7 @@ data/processed/documents/<document-id>/sha256-<hash>/
   "chunk_index": 2,
   "origin": "docling",
   "type": "text",
-  "title": "5 Инструкция",
+  "title": "5 Instructions",
   "content": "...",
   "data": null,
   "text": "title + content + flattened data",
@@ -433,8 +447,6 @@ Office files require LibreOffice for rendering. For Office extraction, the
 rendered PDF is used as the visual artifact; the original filename and version
 stay in chunk metadata.
 
-Install LibreOffice, for example:
-
 Install LibreOffice through your system package manager so that `soffice` is
 available on `PATH`. If it is installed elsewhere, set `SOFFICE_PATH` or pass
 `--soffice`.
@@ -454,12 +466,12 @@ Or:
 
 ## Troubleshooting
 
-### `TELEGRAM_BOT_TOKEN не задан`
+### `TELEGRAM_BOT_TOKEN is missing`
 
 Create `.env` from `.env.example` and put the token from @BotFather into
 `TELEGRAM_BOT_TOKEN`.
 
-### `Чанки не найдены`
+### `No chunks found`
 
 Run the versioned pipeline:
 
@@ -469,7 +481,7 @@ Run the versioned pipeline:
 .venv/bin/python -m app.rag.extract --all
 ```
 
-### `Не обработаны PDF: ...`
+### `Unprocessed PDFs: ...`
 
 A PDF in `data/knowledge/` has no versioned chunks. Run:
 
