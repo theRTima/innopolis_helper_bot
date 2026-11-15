@@ -9,16 +9,27 @@ from pathlib import Path
 from app.rag.context import format_context
 from app.rag.index import SearchIndex, load_chunks_auto
 from app.rag.representation import query_representation, search_representation
+from app.rag.retrieve import retrieve_context
 
 
 def inspect_retrieval(
-    documents_root, chunks_dir, question, top_k=2, min_score=0.0
+    documents_root,
+    chunks_dir,
+    question,
+    top_k=2,
+    min_score=0.0,
+    expand=False,
 ):
     chunks, mode = load_chunks_auto(Path(chunks_dir), Path(documents_root))
-    results = SearchIndex(chunks).search(
-        question,
-        top_k=top_k,
-        min_score=min_score,
+    index = SearchIndex(chunks)
+    results = (
+        retrieve_context(index, question, top_k=top_k, min_score=min_score)
+        if expand
+        else index.search(
+            question,
+            top_k=top_k,
+            min_score=min_score,
+        )
     )
     return {
         "mode": mode,
@@ -29,6 +40,8 @@ def inspect_retrieval(
         "question": question,
         "search_query": query_representation(question),
         "top_k": top_k,
+        "expanded": expand,
+        "context_characters": len(format_context(results)),
         "min_score": min_score,
         "results": [
             {
@@ -63,6 +76,7 @@ def main():
     parser.add_argument("--top-k", type=int, default=2)
     parser.add_argument("--min-score", type=float, default=0.0)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--expand", action="store_true")
     args = parser.parse_args()
     if args.top_k < 1:
         parser.error("--top-k must be positive")
@@ -73,6 +87,7 @@ def main():
         args.question,
         args.top_k,
         args.min_score,
+        args.expand,
     )
     output = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     if args.output:
