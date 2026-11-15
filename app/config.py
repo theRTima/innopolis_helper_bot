@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -60,6 +60,17 @@ class Settings:
     ticket_provider: str = ""
     telegram_allowed_usernames: frozenset[str] = frozenset()
     access_invite_notify_chat_id: int | None = None
+    extraction_vision_concurrency: int = 2
+    extraction_text_concurrency: int = 4
+    extraction_request_timeout: float = 180.0
+    extraction_min_image_pixels: int = 1024
+    extraction_cache_enabled: bool = True
+    extraction_cache_dir: Path = field(
+        default_factory=lambda: Path.home()
+        / ".cache"
+        / "innopolis-helper-bot"
+        / "vision"
+    )
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -70,6 +81,44 @@ class Settings:
         budget = int(budget_text) if budget_text else None
         if budget is not None and not 1 <= budget <= 4096:
             raise ValueError("LLM_THINKING_BUDGET must be from 1 to 4096")
+        vision_concurrency = int(
+            os.getenv("EXTRACTION_VISION_CONCURRENCY", "2")
+        )
+        if not 1 <= vision_concurrency <= 32:
+            raise ValueError(
+                "EXTRACTION_VISION_CONCURRENCY must be from 1 to 32"
+            )
+        text_concurrency = int(os.getenv("EXTRACTION_TEXT_CONCURRENCY", "4"))
+        if not 1 <= text_concurrency <= 32:
+            raise ValueError(
+                "EXTRACTION_TEXT_CONCURRENCY must be from 1 to 32"
+            )
+        request_timeout = float(
+            os.getenv("EXTRACTION_REQUEST_TIMEOUT", "180")
+        )
+        if not 10 <= request_timeout <= 3600:
+            raise ValueError(
+                "EXTRACTION_REQUEST_TIMEOUT must be from 10 to 3600 seconds"
+            )
+        min_image_pixels = int(
+            os.getenv("EXTRACTION_MIN_IMAGE_PIXELS", "1024")
+        )
+        if min_image_pixels < 0:
+            raise ValueError(
+                "EXTRACTION_MIN_IMAGE_PIXELS must be zero or positive"
+            )
+        cache_enabled = os.getenv(
+            "EXTRACTION_CACHE_ENABLED", "true"
+        ).lower().strip() not in {"0", "false", "no", "off"}
+        cache_dir = _path(
+            "EXTRACTION_CACHE_DIR",
+            str(
+                Path.home()
+                / ".cache"
+                / "innopolis-helper-bot"
+                / "vision"
+            ),
+        )
         notification_chat = os.getenv("ACCESS_INVITE_NOTIFY_CHAT_ID", "").strip()
         notification_chat_id = int(notification_chat) if notification_chat else None
         if notification_chat_id is not None and notification_chat_id == 0:
@@ -114,6 +163,12 @@ class Settings:
                 os.getenv("TELEGRAM_ALLOWED_USERNAMES", "")
             ),
             access_invite_notify_chat_id=notification_chat_id,
+            extraction_vision_concurrency=vision_concurrency,
+            extraction_text_concurrency=text_concurrency,
+            extraction_request_timeout=request_timeout,
+            extraction_min_image_pixels=min_image_pixels,
+            extraction_cache_enabled=cache_enabled,
+            extraction_cache_dir=cache_dir,
         )
 
     def validate(self) -> None:

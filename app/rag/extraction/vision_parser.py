@@ -7,9 +7,14 @@ No local MLX runtime is involved.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import logging
 import mimetypes
+import os
 import re
+import threading
+import time
 from pathlib import Path
 
 import pymupdf
@@ -20,11 +25,13 @@ from app.config import Settings
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPTS_DIR = BASE_DIR / "prompts"
+logger = logging.getLogger(__name__)
 
 SETTINGS = Settings.from_env()
 MODEL_ID = SETTINGS.llm_model
 DPI = 200
 MAX_TOKENS = 8192
+CACHE_SCHEMA = 1
 
 BOILERPLATE_RE = re.compile(
     r"Ошибка! Используйте вкладку.*?(?:–|-)\s*\d+", re.DOTALL
