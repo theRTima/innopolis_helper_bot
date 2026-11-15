@@ -71,9 +71,10 @@ services:
       context: .
       dockerfile: Dockerfile.admin
     image: innopolis-helper-bot-admin:local
-    profiles: ["admin"]
     restart: unless-stopped
-    env_file: ./storage/admin.env
+    env_file:
+      - path: ./storage/admin.env
+        required: false
     environment:
       ADMIN_DATABASE_HOST: postgres
       ADMIN_DATABASE_PORT: "5432"
