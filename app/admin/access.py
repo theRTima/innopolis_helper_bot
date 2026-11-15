@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from fastapi_amis_admin.admin.admin import AdminAction, ModelAdmin
 from fastapi_amis_admin.admin.extensions.admin import ReadOnlyModelAdmin
-from fastapi_amis_admin.amis.components import ActionType
+from fastapi_amis_admin.amis.components import ActionType, PageSchema
 
 from app.storage.models import (
     AccessInvite,
@@ -342,7 +342,9 @@ def register_access_admins(site, engine) -> None:
 
     @site.register_admin
     class AllowedTelegramUserAdmin(ModelAdmin):
-        page_schema = "Allowed Telegram users"
+        page_schema = PageSchema(
+            label="Allowed Telegram users", icon="fa fa-user-plus"
+        )
         model = AllowedTelegramUser
         engine = access_engine
         create_fields = [
@@ -386,7 +388,9 @@ def register_access_admins(site, engine) -> None:
 
     @site.register_admin
     class AccessInviteAdmin(ReadOnlyModelAdmin):
-        page_schema = "Invitations"
+        page_schema = PageSchema(
+            label="Invitations", icon="fa fa-ticket"
+        )
         model = AccessInvite
         engine = access_engine
         list_display = [
@@ -413,7 +417,9 @@ def register_access_admins(site, engine) -> None:
 
     @site.register_admin
     class AccessInviteUseAdmin(ReadOnlyModelAdmin):
-        page_schema = "Invite activations"
+        page_schema = PageSchema(
+            label="Invite activations", icon="fa fa-check-circle-o"
+        )
         model = AccessInviteUse
         engine = access_engine
         list_display = [

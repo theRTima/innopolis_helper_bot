@@ -16,7 +16,7 @@ from fastapi_amis_admin.admin.admin import AdminAction
 from fastapi_amis_admin.admin.extensions.admin import ReadOnlyModelAdmin
 from fastapi_amis_admin.admin.settings import Settings
 from fastapi_amis_admin.admin.site import AdminSite, FileAdmin
-from fastapi_amis_admin.amis.components import ActionType
+from fastapi_amis_admin.amis.components import ActionType, PageSchema
 from fastapi_amis_admin.crud.utils import AsyncDatabase
 from fastapi_amis_admin.utils.translation import i18n
 from sqlalchemy.engine import make_url
@@ -36,6 +36,23 @@ class CleanAdminSite(AdminSite):
         app.logo = None
         app.header = None
         app.footer = None
+        app.cssVars = {
+            "--Layout-aside-bg": "#fafbfc",
+            "--Layout-aside-color": "#465268",
+            "--Layout-asideLink-color": "#465268",
+            "--Layout-asideLink-iconColor": "#5b6b85",
+            "--Layout-asideLink-onHover-color": "#172033",
+            "--Layout-asideLink-onHover-iconColor": "#244ce0",
+            "--Layout-aside-onHover-bg": "#eef3fb",
+            "--Layout-asideLink-onActive-color": "#244ce0",
+            "--Layout-aside-onAcitve-bg": "#e4ebff",
+            "--Layout-aside-subList-bg": "#f1f5fa",
+            "--Layout-asideLabel-color": "#7b879c",
+            "--Layout-asideDivider-bg": "#e3e8f0",
+            "--Layout-brand-bg": "#fafbfc",
+            "--Layout-brand-color": "#172033",
+            "--Layout-brandBar-color": "#172033",
+        }
         return app
 
 
@@ -178,19 +195,25 @@ button:hover{background:#244ce0}.foot{margin-top:21px;color:var(--muted);font-si
 
     @site.register_admin
     class QuestionAdmin(ReadOnlyModelAdmin):
-        page_schema = "Questions"
+        page_schema = PageSchema(
+            label="Questions", icon="fa fa-question-circle"
+        )
         model = Question
         list_display = [Question.id, Question.telegram_id, Question.chat_id, Question.question, Question.created_at]
 
     @site.register_admin
     class DocumentAdmin(ReadOnlyModelAdmin):
-        page_schema = "Documents"
+        page_schema = PageSchema(
+            label="Documents", icon="fa fa-file-text-o"
+        )
         model = Document
         list_display = [Document.id, Document.slug, Document.title, Document.format, Document.active_version]
 
     @site.register_admin
     class DocumentImportAdmin(ReadOnlyModelAdmin):
-        page_schema = "Document upload queue"
+        page_schema = PageSchema(
+            label="Document upload queue", icon="fa fa-upload"
+        )
         model = DocumentImportJob
         list_display = [DocumentImportJob.id, DocumentImportJob.title, DocumentImportJob.original_name, DocumentImportJob.status, DocumentImportJob.created_at, DocumentImportJob.error]
         admin_action_maker = [
@@ -208,7 +231,7 @@ button:hover{background:#244ce0}.foot{margin-top:21px;color:var(--muted);font-si
 
     @site.register_admin
     class UserAdmin(ReadOnlyModelAdmin):
-        page_schema = "Users"
+        page_schema = PageSchema(label="Users", icon="fa fa-users")
         model = User
         list_display = [User.id, User.telegram_id, User.created_at]
 
