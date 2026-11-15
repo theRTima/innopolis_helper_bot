@@ -325,6 +325,7 @@ async def test_dashboard_requires_login_and_escapes_stored_labels(
         await db.close()
 
     monkeypatch.setenv("ANALYTICS_DEMO", "0")
+    monkeypatch.setenv("TICKET_PROVIDER", "")
     monkeypatch.setenv("ANALYTICS_PASSWORD", "test-secret")
     monkeypatch.setenv("ANALYTICS_USERNAME", "admin")
     monkeypatch.setenv("ANALYTICS_SHOW_EXAMPLES", "0")
