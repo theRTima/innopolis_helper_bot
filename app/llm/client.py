@@ -70,6 +70,7 @@ SYSTEM_PROMPT = (
     "В answer не должно быть общих знаний или посторонних заданий. "
     "Номера ссылок соответствуют id из sources."
 )
+EMPTY_ANSWER_MESSAGE = "Не удалось сформировать ответ."
 
 
 class LLMClient:
@@ -167,3 +168,21 @@ class LLMClient:
         }:
             answer += "\n\nОтвет ограничен лимитом и может быть неполным."
         return answer
+
+    async def analyze_support_questions(
+        self, system_prompt: str, payload: str
+    ) -> str:
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload},
+            ],
+            temperature=0.1,
+            max_tokens=3000,
+            timeout=45,
+        )
+        return response.choices[0].message.content or ""
+
+    async def close(self) -> None:
+        await self._client.close()

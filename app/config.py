@@ -57,6 +57,7 @@ class Settings:
     llm_thinking_budget: int | None = None
     answer_max_completion_tokens: int = 1400
     support_url: str = ""
+    ticket_provider: str = ""
     telegram_allowed_usernames: frozenset[str] = frozenset()
     access_invite_notify_chat_id: int | None = None
 
@@ -108,6 +109,7 @@ class Settings:
                 os.getenv("ANSWER_MAX_COMPLETION_TOKENS", "1400")
             ),
             support_url=os.getenv("SUPPORT_URL", "").strip(),
+            ticket_provider=os.getenv("TICKET_PROVIDER", "").strip().lower(),
             telegram_allowed_usernames=_allowed_usernames(
                 os.getenv("TELEGRAM_ALLOWED_USERNAMES", "")
             ),
@@ -124,4 +126,10 @@ class Settings:
             raise ValueError(
                 "DOCUMENTS_BASE_URL и DOCUMENT_LINK_SECRET "
                 "должны быть заданы вместе."
+            )
+        if self.ticket_provider not in {
+            "", "demo", "jsm", "zendesk", "usedesk"
+        }:
+            raise ValueError(
+                "TICKET_PROVIDER должен быть demo, jsm, zendesk или usedesk"
             )

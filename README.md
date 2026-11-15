@@ -263,10 +263,10 @@ docker compose up -d --force-recreate grafana
 ```
 
 Re-run the setup script after a database upgrade to refresh the aggregate
-views. For escalation set `SUPPORT_URL` to an HTTPS or Telegram link. After four
-consecutive clarification requests the bot sends a button with that link;
-delivery indicates that Telegram accepted the button, not that a specialist
-received the request. Older records without explicit user feedback have an
+views. `SUPPORT_URL` offers a support link after repeated unanswered questions;
+showing the link is recorded separately from requesting support. A ticket is
+marked delivered only after the selected ticket system confirms creation and
+returns an external ID. Older records without explicit feedback retain an
 unknown outcome.
 
 ### Rate limits
@@ -377,6 +377,10 @@ images.
 | `DATABASE_URL` | — | Optional PostgreSQL URL |
 | `DOCUMENTS_BASE_URL` | — | Public viewer URL for signed source links |
 | `DOCUMENT_LINK_SECRET` | — | HMAC secret for source links |
+| `ANALYTICS_PASSWORD` | — | Password for the internal analytics panel |
+| `TICKET_PROVIDER` | Empty: disabled | `demo`, `jsm`, `zendesk`, or `usedesk` |
+| `TICKET_BASE_URL` | — | Real ticket provider API base URL |
+| `TICKET_API_TOKEN` | — | Real provider secret; never commit it |
 
 `LLM_SESSION_ID` and `LLM_USER_AGENT` are required by some providers (for
 example, OpenCode Go uses `x-opencode-session` for routing). They are harmless
@@ -467,6 +471,26 @@ The viewer serves signed source links for PDF and Office documents. It reads
 legacy files from `KNOWLEDGE_DIR` and admin-uploaded files from the versioned
 store under `DOCUMENTS_DIR`. Remote users need a reachable HTTPS URL, usually
 through a reverse proxy.
+
+## Support analytics
+
+The analytics dashboard groups related questions and shows recurring problems,
+answer outcomes, and changes between periods. A separate worker labels new
+questions without delaying Telegram replies. A reviewer can confirm one
+improvement task from a recurring problem; personal support requests use a
+durable background queue. Run the optional services with:
+
+```bash
+docker compose --profile analytics up -d analytics analytics-labeler
+docker compose --profile tickets up -d ticket-worker
+```
+
+Set `ANALYTICS_PASSWORD` and `TICKET_PROVIDER=demo` in `.env` for an offline
+trial. The analytics panel listens on `http://127.0.0.1:8002/`. To see both
+flows without Telegram or an external API, run `python scripts/demo_ticket_flow.py`.
+Jira Service Management, Zendesk and Usedesk adapters have mock contract tests;
+they still need credentials and validation against the team's test project.
+See [analytics and ticket setup](docs/analytics.md).
 
 ## Local administration preview
 
