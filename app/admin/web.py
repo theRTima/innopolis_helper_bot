@@ -30,8 +30,10 @@ from app.storage.models import Document, DocumentImportJob, Question, User
 
 
 ADMIN_DARK_CSS = """
-html, body {
-    background: #172033 !important;
+html, body,
+.app-wrapper,
+.amis-scope {
+    background: #0f172a !important;
 }
 .cxd-Layout-body,
 .cxd-Layout-content,
@@ -39,7 +41,7 @@ html, body {
 .cxd-Page-main,
 .cxd-Page-content,
 .cxd-Page-body {
-    background: #172033 !important;
+    background: #0f172a !important;
     color: #e2e8f0 !important;
 }
 .cxd-Page-header,
@@ -47,31 +49,129 @@ html, body {
     color: #f8fafc !important;
     border-color: #334155 !important;
 }
-.cxd-Panel,
-.cxd-Panel-body,
-.cxd-Panel-heading,
-.cxd-Crud,
-.cxd-Table-table,
-.cxd-Table-tr,
-.cxd-Table-heading,
-.cxd-Table-footer,
-.cxd-Table-foot {
-    background: #172033 !important;
-    color: #e2e8f0 !important;
+.cxd-Layout-header,
+.cxd-Layout-headerBar {
+    background: #0f172a !important;
+    color: #f8fafc !important;
     border-color: #334155 !important;
 }
-.cxd-Table-table th,
+.cxd-Divider {
+    border-color: #334155 !important;
+}
+.cxd-Panel,
+.cxd-Panel-body,
+.cxd-Crud {
+    background: #1e293b !important;
+    color: #e2e8f0 !important;
+    border: 1px solid #475569 !important;
+}
+.cxd-Panel-heading {
+    background: #273449 !important;
+    color: #f8fafc !important;
+    border-color: #475569 !important;
+}
+.cxd-Table-table {
+    background: #1e293b !important;
+    color: #e2e8f0 !important;
+    border: 1px solid #475569 !important;
+}
+.cxd-Table-tr,
+.cxd-Table-table tr {
+    background: #1e293b !important;
+}
+.cxd-Table-tr--odd,
+.cxd-Table-table tr:nth-child(even) {
+    background: #223047 !important;
+}
+.cxd-Table-table th {
+    background: #273449 !important;
+    color: #f8fafc !important;
+    border-color: #475569 !important;
+}
 .cxd-Table-table td {
     color: #e2e8f0 !important;
     border-color: #334155 !important;
 }
 .cxd-Table-heading,
-.cxd-Table-footer {
+.cxd-Table-footer,
+.cxd-Table-foot {
+    background: #273449 !important;
     color: #cbd5e1 !important;
+    border-color: #475569 !important;
+}
+.cxd-Property > table > thead > tr > th {
+    background: #273449 !important;
+    color: #f8fafc !important;
+    border-color: #475569 !important;
+}
+.cxd-Property > table > tbody > tr {
+    background: #1e293b !important;
+}
+.cxd-Property > table > tbody > tr > th {
+    background: #223047 !important;
+    color: #f8fafc !important;
+    border-color: #475569 !important;
+}
+.cxd-Property > table > tbody > tr > td {
+    color: #e2e8f0 !important;
+    border-color: #334155 !important;
+}
+.cxd-Page a,
+.cxd-Table a {
+    color: #93c5fd !important;
+}
+.cxd-Button,
+.cxd-Button--default {
+    background: #273449 !important;
+    color: #f8fafc !important;
+    border: 1px solid #475569 !important;
+}
+.cxd-Button:hover,
+.cxd-Button--default:hover {
+    background: #334155 !important;
+    color: #ffffff !important;
+    border-color: #64748b !important;
+}
+.cxd-Button--primary {
+    background: #2563eb !important;
+    color: #ffffff !important;
+    border-color: #3b82f6 !important;
+}
+.cxd-Button--primary:hover {
+    background: #1d4ed8 !important;
+    border-color: #60a5fa !important;
+}
+.cxd-Button--danger {
+    background: #b91c1c !important;
+    color: #ffffff !important;
+    border-color: #ef4444 !important;
+}
+.cxd-Button--link {
+    background: transparent !important;
+    color: #93c5fd !important;
+    border: 0 !important;
+}
+.cxd-Button.is-disabled,
+.cxd-Button:disabled {
+    opacity: 0.5 !important;
+}
+.cxd-Form-control,
+.cxd-Form-input,
+.cxd-Form-select,
+.cxd-Page input,
+.cxd-Page select,
+.cxd-Page textarea {
+    background: #0f172a !important;
+    color: #f8fafc !important;
+    border-color: #475569 !important;
+}
+.cxd-Page input::placeholder,
+.cxd-Page textarea::placeholder {
+    color: #94a3b8 !important;
 }
 .cxd-Layout-aside,
 .cxd-Layout-brandBar {
-    background: #172033 !important;
+    background: #0f172a !important;
     color: #f8fafc !important;
 }
 .cxd-Layout-aside a,
@@ -82,7 +182,7 @@ html, body {
 }
 .cxd-Layout-aside .cxd-AsideNav-item:hover,
 .cxd-Layout-aside .cxd-AsideNav-item.is-active {
-    background: #26344d !important;
+    background: #1e293b !important;
     color: #ffffff !important;
 }
 .cxd-Layout-aside .cxd-AsideNav-item.is-active a {
