@@ -286,7 +286,15 @@ def create_app() -> FastAPI:
         bot_username=bot_username,
     )
     inbox = Path(os.environ.get("DOCUMENT_INBOX_DIR", "data/inbox"))
-    register_document_routes(app, sessions=access_sessions, inbox=inbox)
+    documents_root = Path(
+        os.environ.get("DOCUMENTS_DIR", "data/processed/documents")
+    )
+    register_document_routes(
+        app,
+        sessions=access_sessions,
+        inbox=inbox,
+        documents_root=documents_root,
+    )
     app.add_event_handler("shutdown", access_engine.dispose)
 
     session_cookie = "bot_admin_session"
@@ -400,6 +408,20 @@ button:hover{background:#244ce0}.foot{margin-top:21px;color:var(--muted);font-si
         )
         model = Document
         list_display = [Document.id, Document.slug, Document.title, Document.format, Document.active_version]
+        admin_action_maker = [
+            lambda admin: AdminAction(
+                admin,
+                name="delete_document",
+                action=ActionType.Url(
+                    label="Delete",
+                    icon="fa fa-trash text-danger",
+                    tooltip="Delete document and stored files",
+                    url="/documents/${slug}/delete",
+                    blank=False,
+                ),
+                flags=["item"],
+            )
+        ]
 
     @site.register_admin
     class DocumentImportAdmin(ReadOnlyModelAdmin):

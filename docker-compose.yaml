@@ -128,10 +128,13 @@ services:
       ADMIN_DATABASE_PORT: "5432"
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
       DOCUMENT_INBOX_DIR: /app/data/inbox
+      DOCUMENTS_DIR: /app/data/processed/documents
     ports:
       - "127.0.0.1:${ADMIN_PORT:-8001}:8001"
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     volumes:
       - ./data/inbox:/app/data/inbox
+      - ./data/processed:/app/data/processed
     depends_on:
       postgres:
         condition: service_healthy

@@ -748,13 +748,21 @@ shows those records. Optionally set `ACCESS_INVITE_NOTIFY_CHAT_ID` to receive a
 Telegram notification for each activation. Links have an expiry and use limit
 and can be revoked.
 
-The ordinary views use a read-only role. Allowlist and invitation management
-uses a separate role limited to the access, invitation and upload-queue tables.
+The ordinary views use a read-only role. Allowlist, invitation, document-upload
+and document-deletion management use a separate role limited to those tables.
 The **Document upload queue** tab shows processing status; use `/documents/upload`
 to submit PDF, DOCX, XLSX or PPTX files. A separate worker runs the existing
 versioned ingest, render and extract pipeline. Successful imports appear in
 **Documents**, become searchable without restarting the bot, and their source
 links resolve to the stored original. Failed imports retain an error in the queue.
+
+The **Documents** tab has a **Delete** action. It removes the document, its
+chunks and stored version files from the knowledge base, but keeps the upload
+queue rows as history. The same file can be uploaded again afterwards; only a
+live stored version or an active queued/processing upload blocks duplicates.
+The admin container needs the `data/processed` volume for this, and the scoped
+admin role needs the deletion grants from `scripts/setup_admin_access.py`
+(rerun it after upgrading an existing installation).
 
 Install it in a separate environment: this admin version requires a different
 FastAPI version from the one the bot image may install.

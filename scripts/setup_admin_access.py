@@ -1,4 +1,4 @@
-"""Create the limited role used by admin access and document upload pages."""
+"""Create the limited role used by admin access, upload and deletion pages."""
 
 import asyncio
 import os
@@ -53,10 +53,15 @@ async def main() -> None:
                 "GRANT SELECT ON access_invite_uses TO bot_admin_access"
             )
             await connection.execute(
-                "GRANT SELECT, INSERT ON document_import_jobs TO bot_admin_access"
+                "GRANT SELECT, INSERT ON document_import_jobs "
+                "TO bot_admin_access"
             )
             await connection.execute(
-                "GRANT SELECT ON document_versions TO bot_admin_access"
+                "GRANT SELECT, DELETE ON documents, document_versions, "
+                "import_runs, chunks TO bot_admin_access"
+            )
+            await connection.execute(
+                "GRANT SELECT, DELETE ON citations TO bot_admin_access"
             )
             await connection.execute(
                 "GRANT USAGE, SELECT ON SEQUENCE allowed_telegram_users_id_seq, "
