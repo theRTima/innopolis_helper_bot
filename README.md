@@ -115,11 +115,11 @@ docker compose down
 ## Telegram access
 
 Set `TELEGRAM_ALLOWED_USERNAMES=@alice,bob` in `.env`. Entries are
-comma-separated; `@` is optional and matching ignores case. Use Telegram
-usernames, not display names. An empty list denies everyone, and users without
-a username cannot access the bot. Messages, commands, and feedback callbacks
-are checked before bot handlers run. Access follows the current username;
-update the list when a user changes it.
+comma-separated; `@` is optional and matching ignores case. A repeated `@`
+(such as `@@alice`) is tolerated. Use Telegram usernames, not display names. An
+empty list denies everyone, and users without a username cannot access the bot.
+Messages, commands, and feedback callbacks are checked before bot handlers run.
+Access follows the current username; update the list when a user changes it.
 
 Restart local runs after editing `.env`. Docker environment changes require
 recreating the bot container:

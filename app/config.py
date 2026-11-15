@@ -17,17 +17,20 @@ def _path(name: str, default: str) -> Path:
 
 
 def _allowed_usernames(value: str) -> frozenset[str]:
-    usernames = frozenset(
-        item.strip().removeprefix("@").lower()
-        for item in value.split(",")
-        if item.strip()
-    )
-    if any(not re.fullmatch(r"[a-z0-9_]+", name) for name in usernames):
-        raise ValueError(
-            "TELEGRAM_ALLOWED_USERNAMES must contain comma-separated "
-            "Telegram usernames, optionally prefixed with @"
-        )
-    return usernames
+    usernames = set()
+    for item in value.split(","):
+        name = item.strip()
+        if not name:
+            continue
+        # Tolerate a repeated @ (for example "@@alice").
+        name = name.lstrip("@").lower()
+        if not re.fullmatch(r"[a-z0-9_]+", name):
+            raise ValueError(
+                "TELEGRAM_ALLOWED_USERNAMES must contain comma-separated "
+                "Telegram usernames, optionally prefixed with @"
+            )
+        usernames.add(name)
+    return frozenset(usernames)
 
 
 @dataclass(frozen=True)

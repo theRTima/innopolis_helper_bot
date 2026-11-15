@@ -11,8 +11,14 @@ from app.config import Settings
 
 
 def test_whitelist_configuration(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_ALLOWED_USERNAMES", " @Alice, BOB,alice, ,")
-    assert Settings.from_env().telegram_allowed_usernames == {"alice", "bob"}
+    monkeypatch.setenv(
+        "TELEGRAM_ALLOWED_USERNAMES", " @Alice, BOB,alice, ,@@Carol,"
+    )
+    assert Settings.from_env().telegram_allowed_usernames == {
+        "alice",
+        "bob",
+        "carol",
+    }
     monkeypatch.delenv("TELEGRAM_ALLOWED_USERNAMES")
     assert Settings.from_env().telegram_allowed_usernames == frozenset()
 
@@ -31,6 +37,7 @@ def test_whitelist_rejects_invalid_entries(monkeypatch, value):
     "username,allowed,is_bot,permitted",
     [
         ("ALIce", {"alice"}, False, True),
+        ("BOB", {"alice", "bob"}, False, True),
         ("mallory", {"alice"}, False, False),
         ("alice_other", {"alice"}, False, False),
         (None, {"alice"}, False, False),
