@@ -28,6 +28,16 @@ from app.admin.documents import register_document_routes
 from app.storage.models import Document, DocumentImportJob, Question, User
 
 
+class CleanAdminSite(AdminSite):
+    """Admin site without the upstream GitHub header and copyright footer."""
+
+    async def _get_page_as_app(self, request: Request):
+        app = await super()._get_page_as_app(request)
+        app.header = None
+        app.footer = None
+        return app
+
+
 def create_app() -> FastAPI:
     load_dotenv()
     database_url = os.environ.get("ADMIN_DATABASE_URL", "").strip()
@@ -162,7 +172,7 @@ button:hover{background:#244ce0}.foot{margin-top:21px;color:var(--muted);font-si
         response.delete_cookie(session_cookie, path="/")
         return response
 
-    site = AdminSite(settings=Settings(database_url_async=database_url, language="en_US", site_title="Bot administration"))
+    site = CleanAdminSite(settings=Settings(database_url_async=database_url, language="en_US", site_title="Bot administration"))
     site.unregister_admin(FileAdmin)
 
     @site.register_admin
