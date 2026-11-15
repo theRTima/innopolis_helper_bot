@@ -256,6 +256,9 @@ docker-compose.yaml
 .dockerignore
 ```
 
+`Dockerfile.ingest` installs CPU-only PyTorch so the image does not download
+CUDA/NVIDIA libraries that are unnecessary for document extraction.
+
 Build and start:
 
 ```bash
