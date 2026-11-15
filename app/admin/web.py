@@ -40,31 +40,46 @@ class CleanAdminSite(AdminSite):
             .cxd-Layout-body,
             .cxd-Layout-content,
             .cxd-Page {
-                background: #e9eef6 !important;
+                background: #ffffff !important;
             }
             .cxd-Layout-aside,
             .cxd-Layout-brandBar {
-                background: #dbe5f2 !important;
+                background: #172033 !important;
+                color: #f8fafc !important;
+            }
+            .cxd-Layout-aside a,
+            .cxd-Layout-aside .cxd-AsideNav-item,
+            .cxd-Layout-aside .cxd-AsideNav-item a,
+            .cxd-Layout-brandBar a {
+                color: #e2e8f0 !important;
+            }
+            .cxd-Layout-aside .cxd-AsideNav-item:hover,
+            .cxd-Layout-aside .cxd-AsideNav-item.is-active {
+                background: #26344d !important;
+                color: #ffffff !important;
+            }
+            .cxd-Layout-aside .cxd-AsideNav-item.is-active a {
+                color: #ffffff !important;
             }
         """
         app.cssVars = {
-            "--Layout-body-bg": "#e9eef6",
-            "--Page-main-bg": "#e9eef6",
-            "--Layout-aside-bg": "#dbe5f2",
-            "--Layout-aside-color": "#2c3a50",
-            "--Layout-asideLink-color": "#3c4b63",
-            "--Layout-asideLink-iconColor": "#54657f",
-            "--Layout-asideLink-onHover-color": "#172033",
-            "--Layout-asideLink-onHover-iconColor": "#244ce0",
-            "--Layout-aside-onHover-bg": "#cedaeb",
-            "--Layout-asideLink-onActive-color": "#244ce0",
-            "--Layout-aside-onAcitve-bg": "#bfd2f1",
-            "--Layout-aside-subList-bg": "#d2deee",
-            "--Layout-asideLabel-color": "#66758c",
-            "--Layout-asideDivider-bg": "#c7d4e6",
-            "--Layout-brand-bg": "#dbe5f2",
-            "--Layout-brand-color": "#172033",
-            "--Layout-brandBar-color": "#172033",
+            "--Layout-body-bg": "#ffffff",
+            "--Page-main-bg": "#ffffff",
+            "--Layout-aside-bg": "#172033",
+            "--Layout-aside-color": "#f8fafc",
+            "--Layout-asideLink-color": "#e2e8f0",
+            "--Layout-asideLink-iconColor": "#cbd5e1",
+            "--Layout-asideLink-onHover-color": "#ffffff",
+            "--Layout-asideLink-onHover-iconColor": "#ffffff",
+            "--Layout-aside-onHover-bg": "#26344d",
+            "--Layout-asideLink-onActive-color": "#ffffff",
+            "--Layout-aside-onAcitve-bg": "#26344d",
+            "--Layout-aside-subList-bg": "#1e293b",
+            "--Layout-asideLabel-color": "#aab7ca",
+            "--Layout-asideDivider-bg": "#334155",
+            "--Layout-brand-bg": "#172033",
+            "--Layout-brand-color": "#f8fafc",
+            "--Layout-brandBar-color": "#f8fafc",
         }
         return app
 
