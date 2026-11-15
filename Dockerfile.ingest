@@ -26,6 +26,12 @@ COPY requirements ./requirements
 COPY app ./app
 COPY scripts ./scripts
 
+# Install CPU-only PyTorch first. The default Linux wheel pulls CUDA/NVIDIA
+# libraries that are unnecessary for document extraction and can exhaust
+# Docker disk space.
+RUN pip install --index-url https://download.pytorch.org/whl/cpu \
+    torch torchvision
+
 RUN pip install -r requirements/ingestion.txt
 
 RUN useradd --create-home --uid 1000 app \
