@@ -1,45 +1,24 @@
 # Innopolis Helper Bot
 
-Telegram assistant for internal documentation, with source citations, feedback,
-support tickets, managed access, and support analytics. Docling and a remote
-multimodal model prepare documents; BM25 retrieval supplies evidence to an
-OpenAI-compatible answer model.
+Telegram assistant for internal documentation. It answers only from loaded
+documents, cites sources, collects feedback, opens support tickets, manages
+Telegram access, and can show support analytics.
 
-## Docker setup
+Documents are parsed with Docling and a remote multimodal model. Answers use
+BM25 retrieval over versioned chunks and an OpenAI-compatible chat model.
 
-### What runs
+## Quick start with Docker
 
-| Service | Purpose | Address |
-| --- | --- | --- |
-| `bot` | Telegram polling process | — |
-| `postgres` | PostgreSQL database | `127.0.0.1:5438` |
-| `viewer` | Signed document viewer | `http://127.0.0.1:8090` |
-| `grafana` | Analytics dashboards | `http://127.0.0.1:3000/d/bot-analytics` |
-| `ingest` | One-shot PDF processing; not a long-running service | — |
-| `admin` | Admin panel: read-only views, allowlist/invites, document uploads | `http://127.0.0.1:8001/admin/` |
-| `document-worker` | Background processing for admin document uploads | — |
-| `ticket-worker` | Durable ticket delivery worker; starts by default and idles without `TICKET_PROVIDER` | — |
-| `analytics` | Optional support analytics panel (`analytics` profile) | `http://127.0.0.1:8002/` |
-| `analytics-labeler` | Optional background question labeler (`analytics` profile) | — |
-| `llama` | Optional local llama.cpp server | `http://127.0.0.1:8080` |
+Requirements: Docker with Compose. For a GPU-free local model server, use the
+optional `llm` profile described below.
 
-Published ports bind to `127.0.0.1` only, so the stack is not exposed to the
-network by default. Services with a profile are **not** started by
-`docker compose up -d`; enable their profile explicitly.
-
-### First-time launch
-
-Follow these steps once on a new machine.
-
-**1. Install Docker with Compose.**
-
-**2. Create the environment file.**
+**1. Create the environment file.**
 
 ```bash
 cp .env.example .env
 ```
 
-Set at least these values in `.env`:
+Set at least:
 
 ```env
 TELEGRAM_BOT_TOKEN=...
@@ -50,763 +29,99 @@ LLM_API_KEY=your-api-key
 POSTGRES_PASSWORD=replace-with-a-strong-password
 GRAFANA_ADMIN_PASSWORD=replace-with-another-password
 GRAFANA_DB_PASSWORD=replace-with-a-reader-password
-DOCUMENTS_BASE_URL=http://127.0.0.1:8090
-DOCUMENT_LINK_SECRET=replace-with-a-long-random-secret
 ```
 
-`DOCUMENTS_BASE_URL` and `DOCUMENT_LINK_SECRET` enable signed source links in
-bot answers. Both must be set together. For Telegram users on other devices,
-use a publicly reachable HTTPS viewer URL, normally through a reverse proxy.
+`DOCUMENTS_BASE_URL` and `DOCUMENT_LINK_SECRET` enable signed source links and
+must be set together. On Linux, set `HOST_UID` and `HOST_GID` to your user ID so
+uploaded and generated files have the expected ownership.
 
-`TELEGRAM_ALLOWED_USERNAMES` is required for access. An empty list denies
-everyone. Use Telegram usernames, not display names.
-
-For ticket creation, also set `TICKET_PROVIDER=demo`, `jsm`, `zendesk` or
-`usedesk` and the provider credentials described under
-[Tickets and analytics](#tickets-and-analytics). The ticket worker starts with
-the default stack; without a provider it stays idle instead of failing.
-
-**3. Add the source PDFs.**
+**2. Build the images.**
 
 ```bash
-mkdir -p data/knowledge data/processed
+./scripts/docker_build.sh
 ```
 
-Copy the PDFs into `data/knowledge/`. No per-file environment variables are
-needed. Document IDs are derived from filenames, while existing stored manifests
-keep their current IDs.
+This builds the default, admin and ingestion images, then removes old dangling
+Docker data. The ingestion image installs CPU-only PyTorch, Docling and
+LibreOffice, so the first build is large. Dependencies are cached in a separate
+layer: changing `app/` no longer reinstalls them.
 
-**4. Build the images.**
+Equivalent manual build:
 
 ```bash
 docker compose --profile ingest build
 ```
 
-The ingestion image installs CPU-only PyTorch and LibreOffice, so the first
-build takes several minutes and downloads a large amount of data.
+Docling and Hugging Face models are stored in the `ingest_cache` volume and are
+downloaded only on the first extraction.
 
-Dependencies are installed before the application sources, so editing `app/`
-only rebuilds a small layer instead of reinstalling PyTorch/Docling. BuildKit
-keeps pip and apt caches on the host between builds.
-
-Docling and Hugging Face model downloads are stored in the `ingest_cache`
-Docker volume, so the first ingestion downloads them once and later runs reuse
-the local copy.
-
-**Docker disk maintenance.**
-
-```bash
-./scripts/docker_cleanup.sh
-```
-
-For a build that cleans up automatically afterwards, use
-`./scripts/docker_build.sh` (it runs the same `docker compose build` command
-and then the cleanup below).
-
-The cleanup script removes stopped one-shot containers, dangling images, unused
-networks and build cache older than 7 days. It never prunes named volumes, so
-the database, Grafana state and the Docling model cache are preserved. Tune the
-cache age with `BUILD_CACHE_TTL` and also drop unused images with `--images`:
-
-```bash
-BUILD_CACHE_TTL=720h ./scripts/docker_cleanup.sh
-./scripts/docker_cleanup.sh --images
-./scripts/docker_cleanup.sh --all-cache   # drop all build cache
-```
-
-For automatic cleanup, run it from a weekly cron/launchd job (or a systemd
-timer on a Linux host). Container logs are capped at 3 × 10 MB per service by
-`docker-compose.yaml`, so they cannot grow without bound.
-
-**5. Start PostgreSQL and apply migrations.**
-
-```bash
-docker compose up -d --wait postgres
-docker compose run --rm --no-deps bot alembic upgrade head
-```
-
-**6. Process PDFs from `data/knowledge` (optional if using admin uploads).**
-
-```bash
-docker compose --profile ingest run --rm ingest
-```
-
-This runs `ingest -> render -> extract` for all PDFs in `data/knowledge/`.
-Extraction calls the configured multimodal model and can take a long time for
-large documents. Unchanged files are cached on later runs.
-
-You can skip this step and upload documents after startup from the admin panel:
-**Document upload queue → Upload document**. Both paths produce the same
-versioned chunks.
-
-**7. Initialize Grafana access.**
-
-```bash
-docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
-```
-
-This creates the aggregate views and the read-only `grafana_reader` role.
-
-**8. Prepare the admin panel.**
-
-The admin container starts with the rest of the stack and needs
-`storage/admin.env`. Follow “Run the administration panel in Docker” below to
-create the read-only database role and that file before starting the stack. If
-the file is missing, the admin container exits but the remaining services still
-start.
-
-**9. Start the long-running services.**
+**3. Start the stack.**
 
 ```bash
 docker compose up -d
+docker compose ps
 ```
 
-This starts PostgreSQL, bot, viewer, Grafana, admin, `document-worker` and
-`ticket-worker`.
+The bot applies database migrations on startup. PostgreSQL must be healthy
+before the bot, workers and admin can use it. The admin container exits until
+`storage/admin.env` is prepared; the other services still run.
 
-**10. Optional: enable analytics.**
+**4. Open the services.**
 
-Set `ANALYTICS_PASSWORD` in `.env` to enable the analytics panel, then start
-the optional analytics services:
-
-```bash
-docker compose --profile analytics up -d analytics analytics-labeler
-```
-
-The ticket worker already starts with the stack. Use `demo` for an offline
-ticket trial. Real provider settings are described in
-[Tickets and analytics](#tickets-and-analytics) and `docs/analytics.md`.
-
-**11. Verify the launch.**
-
-```bash
-docker compose --profile "*" ps
-docker compose logs --tail=50 bot
-```
-
-`postgres` should be `healthy`, and the bot log should contain a line like:
-
-```text
-Run polling for bot @your_bot_name
-```
-
-Open:
-
-- Grafana: `http://localhost:3000/d/bot-analytics`
-- Viewer: `http://localhost:8090`
-- Admin: `http://127.0.0.1:8001/admin/`
-- Analytics, if enabled: `http://127.0.0.1:8002/`
-
-Log in to Grafana as `admin` with `GRAFANA_ADMIN_PASSWORD` from `.env`. The
-analytics panel uses HTTP Basic authentication with `ANALYTICS_USERNAME`
-(default `admin`) and `ANALYTICS_PASSWORD`.
-
-The bot starts even when no chunks exist, but it cannot answer from the
-knowledge base until at least one document is processed. Repeat step 6 or upload
-a document through the admin panel.
-
-On Linux, set `HOST_UID` and `HOST_GID` in `.env` to your user ID so the
-ingestion container writes files with the expected ownership.
-
-If the model endpoint runs on the host, set:
-
-```env
-LLM_BASE_URL=http://host.docker.internal:8081/v1
-```
-
-### Add or replace documents
-
-There are two supported paths. Neither requires restarting the bot: before
-each question the bot compares chunk-manifest timestamps and reloads changed
-documents automatically.
-
-#### Upload through the admin panel
-
-1. Open `http://127.0.0.1:8001/admin/`.
-2. Go to **Document upload queue**.
-3. Select **Upload document**, enter a title and choose a PDF, DOCX, XLSX or
-   PPTX file.
-4. The upload is written to `data/inbox/`, queued in PostgreSQL and picked up
-   by `document-worker`.
-5. The worker runs `ingest -> render -> extract` and publishes versioned chunks
-   under `data/processed/`.
-6. The next bot question includes the new document. Signed source links point
-   at the stored original.
-
-Monitor the queue and worker:
-
-```bash
-docker compose logs -f document-worker
-docker compose logs -f admin
-```
-
-The worker processes **one document at a time**. Large files can take a long
-time, and later uploads remain `queued` until the current job finishes. This is
-normal. Within the current document, independent picture regions and page
-fallbacks are analyzed concurrently according to
-`EXTRACTION_VISION_CONCURRENCY`.
-
-If a file matches an existing checksum, it is not processed. The queue records
-a completed entry whose stage is `file already exists`, and the form reports:
-
-```text
-Same file already exists.
-```
-
-Each queue row shows status, progress percentage and the current stage
-(`ingest`, `render`, `image analysis`, `chunking` or `completed`).
-
-#### Process files from `data/knowledge`
-
-The batch scanner discovers all PDFs in `data/knowledge/`. It does not scan
-other formats; upload DOCX, XLSX and PPTX through the admin panel.
-
-```bash
-cp new-document.pdf data/knowledge/
-docker compose --profile ingest run --rm ingest
-```
-
-Existing unchanged files use the extraction cache; new or changed files are
-processed. The bot will load them on the next question. If you want to force an
-immediate reload instead of waiting for the next question:
-
-```bash
-docker compose restart bot
-```
-
-Preview derived document IDs without extraction:
-
-```bash
-docker compose --profile ingest run --rm ingest --dry-run
-```
-
-If you prefer not to serve questions during a long extraction, stop the bot
-first and start it afterwards:
-
-```bash
-docker compose stop bot
-docker compose --profile ingest run --rm ingest
-docker compose start bot
-```
-
-### Start, stop and restart services
-
-Start or stop the default stack while keeping containers and data:
-
-```bash
-docker compose stop
-docker compose start
-```
-
-If analytics profile services are running, include them explicitly:
-
-```bash
-docker compose --profile "*" stop
-docker compose --profile "*" start
-```
-
-Remove the default containers and network but keep the PostgreSQL and Grafana
-data volumes:
-
-```bash
-docker compose down
-```
-
-If optional profile services are running, use the wildcard profile. Otherwise
-Docker may leave those containers attached and report that the network is still
-in use:
-
-```bash
-docker compose --profile "*" down
-```
-
-Remove the containers **and delete all stored data** (database, analytics,
-tickets and Grafana state). This is destructive:
-
-```bash
-docker compose --profile "*" down -v
-```
-
-Restart one service:
-
-```bash
-docker compose restart bot
-docker compose restart viewer
-docker compose restart admin
-docker compose restart document-worker
-docker compose restart ticket-worker
-docker compose restart grafana
-docker compose restart postgres
-docker compose --profile analytics restart analytics analytics-labeler
-```
-
-Restarting PostgreSQL can briefly interrupt the bot, viewer, admin, workers and
-Grafana. They usually reconnect automatically; if not, restart them as well.
-
-`docker compose restart` does **not** reload `.env`. After changing environment
-variables, recreate the affected container:
-
-```bash
-docker compose up -d --force-recreate bot
-docker compose up -d --force-recreate admin
-docker compose up -d --force-recreate grafana
-docker compose up -d --force-recreate ticket-worker
-docker compose --profile analytics up -d --force-recreate analytics analytics-labeler
-```
-
-Stop or start an individual service without recreating it:
-
-```bash
-docker compose stop bot
-docker compose start bot
-docker compose stop admin
-docker compose start admin
-docker compose stop ticket-worker
-docker compose start ticket-worker
-docker compose --profile analytics stop analytics analytics-labeler
-```
-
-`ingest` is a one-shot job, not a daemon. Run it with
-`docker compose --profile ingest run --rm ingest` whenever documents change.
-`ticket-worker` starts with the default stack; the analytics services use the
-optional `analytics` profile.
-
-Useful diagnostics:
-
-```bash
-docker compose --profile "*" ps
-docker compose logs -f bot
-docker compose logs -f admin
-docker compose logs -f document-worker
-docker compose logs -f grafana
-docker compose logs -f postgres
-docker compose logs -f ticket-worker
-docker compose --profile analytics logs -f analytics analytics-labeler
-```
-
-### Grafana
-
-Grafana is available at `http://localhost:3000/d/bot-analytics`. Set
-`GRAFANA_ADMIN_PASSWORD` and `GRAFANA_DB_PASSWORD` in `.env`, then run the
-initialization command from the first-time launch if you have not done so
-already:
-
-```bash
-docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
-docker compose up -d grafana
-```
-
-If you change `GRAFANA_DB_PASSWORD`, rerun the setup script and recreate
-Grafana:
-
-```bash
-docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
-docker compose up -d --force-recreate grafana
-```
-
-Re-run the setup script after a database upgrade to refresh the aggregate
-views. `SUPPORT_URL` offers a support link after repeated unanswered questions;
-showing the link is recorded separately from requesting support. A ticket is
-marked delivered only after the selected ticket system confirms creation and
-returns an external ID. Older records without explicit feedback retain an
-unknown outcome.
-
-### Tickets and analytics
-
-Ticket creation runs with the default stack; support analytics is an optional
-profile. If `TICKET_PROVIDER` is empty, `ticket-worker` stays idle.
-
-Apply migrations first when upgrading an existing installation:
-
-```bash
-docker compose run --rm --no-deps bot alembic upgrade head
-```
-
-For an offline ticket trial:
-
-```env
-TICKET_PROVIDER=demo
-```
-
-```bash
-docker compose up -d ticket-worker
-docker compose logs -f ticket-worker
-```
-
-Users can request support with `/operator`, by writing “оператор”, or from the
-feedback actions after an unresolved answer. The request is stored in the
-durable queue immediately; the worker creates it in the ticket system and stores
-the external ID and status. Repeated requests reuse the existing ticket.
-
-For a real provider, set:
-
-```env
-TICKET_PROVIDER=jsm          # or zendesk, usedesk
-TICKET_BASE_URL=https://...
-TICKET_API_TOKEN=...
-TICKET_EMAIL=...
-JIRA_SERVICE_DESK_ID=...
-JIRA_REQUEST_TYPE_ID=...
-USEDESK_CHANNEL_ID=...
-TICKET_WEB_BASE_URL=https://...
-```
-
-Ticket tokens are secrets. Keep them in `.env`, never in commits.
-
-Enable the analytics panel and background labeler:
-
-```env
-ANALYTICS_PASSWORD=replace-with-a-strong-password
-ANALYTICS_USERNAME=admin
-```
-
-```bash
-docker compose --profile analytics up -d analytics analytics-labeler
-docker compose --profile analytics logs -f analytics analytics-labeler
-```
-
-The panel is available at `http://127.0.0.1:8002/` and uses HTTP Basic
-authentication. Run one labeler per database; it labels new questions in the
-background without delaying Telegram replies. See
-[analytics and ticket setup](docs/analytics.md) for provider details, metrics,
-review workflow and privacy notes.
-
-### Rate limits
-
-The bot allows one question every three seconds. Eight messages from the same
-user within five seconds trigger a 30-second cooldown. The rate-limit reply
-states the allowed interval and the remaining wait; the cooldown reply states
-the message limit, the time window and the cooldown. After the first cooldown
-warning, further messages during the cooldown are logged but receive no reply.
-Limits are held in process memory, so they reset on restart and are not shared
-between bot instances.
-
-### Ingestion notes
-
-The admin upload accepts PDF, DOCX, XLSX and PPTX. The batch scanner for
-`data/knowledge/` discovers PDFs only; use the local pipeline below for other
-formats.
-
-## Telegram access
-
-`TELEGRAM_ALLOWED_USERNAMES` in `.env` bootstraps the allowlist once on the
-first bot startup after the allowlist migration. Entries are comma-separated;
-`@` is optional and matching ignores case. After bootstrap, manage access in the admin panel's
-**Allowed Telegram users** tab; changes apply without restarting the bot. Use
-Telegram usernames, not display names. Users without a username cannot access
-the bot unless an invite link binds their Telegram ID directly.
-
-## Local Python setup
-
-- Python 3.11+
-- A Telegram bot token from @BotFather
-- An OpenAI-compatible model endpoint
-- A multimodal model for PDF/image ingestion
-- LibreOffice only for Office previews and Office extraction
-
-Python dependencies are split into:
-
-| File | Purpose |
+| Service | Address |
 | --- | --- |
-| `requirements/base.txt` | Installs the project and all runtime dependencies from `pyproject.toml` |
-| `requirements/ingestion.txt` | Docling, Jinja2, PyMuPDF |
-| `requirements/dev.txt` | Test and lint dependencies |
+| Admin panel | `http://127.0.0.1:8001/admin/` |
+| Document viewer | `http://127.0.0.1:8090` |
+| Grafana | `http://127.0.0.1:3000/d/bot-analytics` |
+| Analytics panel (optional profile) | `http://127.0.0.1:8002/` |
 
-### Install dependencies
+All published ports bind to `127.0.0.1`. Use a reverse proxy for remote access.
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements/base.txt
-.venv/bin/python -m pip install -r requirements/ingestion.txt
-```
+## Docker services
 
-### Configure `.env`
-
-```bash
-cp .env.example .env
-```
-
-Minimum configuration:
-
-```env
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_ALLOWED_USERNAMES=@alice,bob
-
-LLM_BASE_URL=https://your-provider.example.com/v1
-LLM_MODEL=your-multimodal-model-id
-LLM_API_KEY=your-api-key
-
-# Optional provider routing headers
-LLM_SESSION_ID=innopolis-helper-bot
-LLM_USER_AGENT=innopolis-helper-bot/1.0
-```
-
-The same model settings are used by the bot for answer generation and by
-`app.rag.extract` for the normalized vision pipeline.
-
-The examples use POSIX environment paths (`.venv/bin/python`). On Windows use
-`.venv\Scripts\python.exe` with the same arguments.
-
-The model must support **image input** for document extraction. A text-only
-model can answer questions from existing chunks but cannot process new PDFs or
-images.
-
-Extraction analyses independent picture regions and page fallbacks in parallel.
-The defaults (`EXTRACTION_VISION_CONCURRENCY=2`) are safe for most remote
-providers. Increase them only after checking the provider's rate limits; set
-the value to `1` if requests are throttled or if a local llama.cpp server is
-configured with a single slot. A local server needs matching `--parallel`
-capacity and a large enough context. Text grouping uses a separate limit
-(`EXTRACTION_TEXT_CONCURRENCY=4`).
-
-Raw vision and chunk-grouping responses are cached per request, so retries and
-reruns after a partial failure reuse already completed calls. The cache is
-invalidated automatically when the model, prompt, or reasoning settings change.
-Successful whole-document extractions are still served by the versioned chunk
-cache.
-
-### Environment variables
-
-| Variable | Default | Purpose |
+| Service | Purpose | Profile |
 | --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | — | Telegram bot token |
-| `TELEGRAM_BOT_USERNAME` | — | Bot username without `@`, needed to create invite links |
-| `ACCESS_INVITE_NOTIFY_CHAT_ID` | — | Optional Telegram chat/user ID to notify when an invite is activated |
-| `TELEGRAM_ALLOWED_USERNAMES` | Empty: deny everyone | Initial comma-separated allowlist, imported once into the database |
-| `SUPPORT_URL` | Empty | Support button destination |
-| `LLM_BASE_URL` | local fallback | OpenAI-compatible base URL, usually ending in `/v1` |
-| `LLM_MODEL` | `qwen3.8-flash` | Provider model ID |
-| `LLM_API_KEY` | `local` | Provider API key |
-| `LLM_SESSION_ID` | `innopolis-helper-bot` | Stable routing/session header |
-| `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Client identification |
-| `LLM_ANSWER_REASONING_EFFORT` | `minimal` | Fallback reasoning effort for answers when thinking budget is not used |
-| `LLM_EXTRACTION_REASONING_EFFORT` | `low` | Reasoning effort for picture/page analysis and chunk grouping |
-| `EXTRACTION_VISION_CONCURRENCY` | `2` | Parallel picture/page vision requests per extraction |
-| `EXTRACTION_TEXT_CONCURRENCY` | `4` | Parallel chunk-grouping requests per extraction |
-| `EXTRACTION_REQUEST_TIMEOUT` | `180` | Per-request timeout for extraction model calls, seconds |
-| `EXTRACTION_MIN_IMAGE_PIXELS` | `1024` | Skip decorative pictures smaller than this; `0` disables |
-| `EXTRACTION_CACHE_ENABLED` | `true` | Cache raw extraction responses for retries and partial reruns |
-| `EXTRACTION_CACHE_DIR` | `~/.cache/innopolis-helper-bot/vision` | Raw response cache directory |
-| `LLM_ENABLE_THINKING` | `auto` | Bounded thinking for the tested OpenCode/qwen pair |
-| `LLM_THINKING_BUDGET` | provider default (`512`) | Maximum thinking tokens when enabled |
-| `ANSWER_MAX_COMPLETION_TOKENS` | `1400` | Combined thinking + answer token budget |
-| `ANSWER_MAX_TOKENS` | `600` | Answer generation limit |
-| `TEMPERATURE` | `0.1` | Answer generation temperature |
-| `TOP_K` | `2` | Initial retrieval seeds before bounded context expansion |
-| `MIN_SCORE` | `0` | Minimum BM25 score |
-| `KNOWLEDGE_DIR` | `data/knowledge` | Source PDF directory used for ingest and startup checks |
-| `DOCUMENTS_DIR` | `data/processed/documents` | Versioned `app/rag` store |
-| `DATABASE_PATH` | `data/bot.sqlite3` | SQLite path |
-| `DATABASE_URL` | — | Optional PostgreSQL URL |
-| `DOCUMENTS_BASE_URL` | — | Public viewer URL for signed source links |
-| `DOCUMENT_LINK_SECRET` | — | HMAC secret for source links |
-| `ANALYTICS_USERNAME` | `admin` | HTTP Basic username for the analytics panel |
-| `ANALYTICS_PASSWORD` | — | Password for the internal analytics panel |
-| `ANALYTICS_AREAS_FILE` | — | Optional JSON product-area mapping |
-| `ANALYTICS_SHOW_EXAMPLES` | `0` | Show anonymized examples in analytics |
-| `ANALYTICS_DEMO` | `0` | Use generated demo cards without a database |
-| `ANALYTICS_PORT` | `8002` | Analytics panel host port |
-| `TICKET_PROVIDER` | Empty: disabled | `demo`, `jsm`, `zendesk`, or `usedesk` |
-| `TICKET_BASE_URL` | — | Real ticket provider API base URL |
-| `TICKET_API_TOKEN` | — | Real provider secret; never commit it |
-| `TICKET_EMAIL` | — | Optional agent email for Jira/Zendesk authentication |
-| `JIRA_SERVICE_DESK_ID` | — | Jira Service Management service desk ID |
-| `JIRA_REQUEST_TYPE_ID` | — | Jira Service Management request type ID |
-| `USEDESK_CHANNEL_ID` | — | Usedesk channel ID |
-| `TICKET_WEB_BASE_URL` | — | Optional browser URL prefix for ticket links |
+| `bot` | Telegram polling and answers | default |
+| `postgres` | PostgreSQL | default |
+| `viewer` | Signed PDF/Office source viewer | default |
+| `admin` | Admin panel | default |
+| `document-worker` | Processes admin uploads | default |
+| `ticket-worker` | Delivers support tickets; idles without a provider | default |
+| `grafana` | Dashboards | default |
+| `ingest` | One-shot bulk PDF processing | `ingest` |
+| `analytics` | Support analytics panel | `analytics` |
+| `analytics-labeler` | Background question labeler | `analytics` |
+| `llama` | Optional local llama.cpp server | `llm` |
 
-`LLM_SESSION_ID` and `LLM_USER_AGENT` are required by some providers (for
-example, OpenCode Go uses `x-opencode-session` for routing). They are harmless
-for generic OpenAI-compatible providers.
-
-Reasoning levels are provider model parameters (`none`, `minimal`, `low`,
-`medium`, `high`). Extraction uses `low`; answer generation uses a bounded
-thinking budget for the tested OpenCode/qwen pair. For other providers/models,
-`LLM_ANSWER_REASONING_EFFORT` is used when thinking is not explicitly enabled.
-See `docs/answer-latency.md` for measurements and provider constraints.
-
-### Prepare documentation
-
-The project uses one document workflow: every source is stored as an immutable
-version, rendered when needed, and extracted into versioned chunks.
-
-The examples use `travel.pdf` and `furniture.pdf` as placeholders. Replace them
-with the actual files under `data/knowledge/`.
-
-#### Pipeline
+Services with a profile are not started by plain `docker compose up -d`. Enable
+them explicitly, for example:
 
 ```bash
-# 1. Store an immutable version
-.venv/bin/python -m app.rag.ingest \
-  "data/knowledge/travel.pdf" \
-  --document-id travel
-
-# 2. Render a preview (optional for PDF, required for Office)
-.venv/bin/python -m app.rag.render \
-  "data/processed/documents/travel/sha256-<hash>" \
-  --dpi 150
-
-# 3. Extract retrieval chunks
-.venv/bin/python -m app.rag.extract \
-  "data/processed/documents/travel/sha256-<hash>"
+docker compose --profile analytics up -d analytics analytics-labeler
+docker compose --profile ingest run --rm ingest
 ```
 
-Batch mode:
+### Optional local llama.cpp
+
+Place the GGUF model and multimodal projector in `.models/`, set
+`LLM_BASE_URL=http://llama:8080/v1`, then start the `llm` profile:
 
 ```bash
-.venv/bin/python -m app.rag.render --all
-.venv/bin/python -m app.rag.extract --all
+docker compose --profile llm up -d llama
 ```
 
-#### Debug a single version
+Set `LLAMA_MODEL_FILE` and `LLAMA_MMPROJ_FILE` if the filenames differ from the
+defaults. For parallel extraction, raise `LLAMA_PARALLEL` and `LLAMA_CTX`
+together; each slot receives `LLAMA_CTX / LLAMA_PARALLEL`. Set
+`EXTRACTION_VISION_CONCURRENCY=1` when using a single-slot server.
 
-```bash
-.venv/bin/python -m app.rag.extract \
-  "data/processed/documents/travel/sha256-<hash>" \
-  --pages 4,7
-```
+### Admin panel setup
 
-Debug extracts have `status: partial` and are ignored by the bot.
+The admin panel needs two scoped PostgreSQL roles and `storage/admin.env`.
+The ordinary views use the read-only `bot_admin_reader` role. Allowlist,
+invite, upload and document-deletion views use `bot_admin_access`.
 
-### Start the bot
-
-```bash
-.venv/bin/python -m app
-```
-
-Startup checks:
-
-1. Telegram token is present.
-2. SQLite/PostgreSQL migrations are applied.
-3. The LLM client is created.
-
-The bot can start without any documents. It logs a warning and answers that no
-supporting fragments were found until a document is processed. Before each
-question it refreshes the versioned index, so documents added through the admin
-panel or batch ingestion become available without a restart.
-
-If a PDF in `KNOWLEDGE_DIR` has no versioned chunks, it is skipped with a
-warning and remains unavailable to the bot.
-
-### Optional document viewer
-
-Set both values in `.env`:
-
-```env
-DOCUMENTS_BASE_URL=http://127.0.0.1:8090
-DOCUMENT_LINK_SECRET=some-long-random-secret
-```
-
-Start the viewer:
-
-```bash
-.venv/bin/python -m uvicorn app.anchors.viewer:app --host 127.0.0.1 --port 8090
-```
-
-The viewer serves signed source links for PDF and Office documents. It reads
-legacy files from `KNOWLEDGE_DIR` and admin-uploaded files from the versioned
-store under `DOCUMENTS_DIR`. Remote users need a reachable HTTPS URL, usually
-through a reverse proxy.
-
-## Support analytics and tickets
-
-The optional Docker profiles are documented under
-[Tickets and analytics](#tickets-and-analytics). For local development, apply
-migrations and run the labeler, panel and ticket worker directly:
-
-```bash
-.venv/bin/alembic upgrade head
-.venv/bin/python -m app.analytics --watch 30
-.venv/bin/python -m uvicorn app.analytics.web:app --host 127.0.0.1 --port 8002
-.venv/bin/python -m app.tickets.worker --watch 30
-```
-
-The analytics dashboard groups related questions and shows recurring problems,
-answer outcomes, and changes between periods. A separate worker labels new
-questions without delaying Telegram replies. A reviewer can confirm one
-improvement task from a recurring problem; personal support requests use a
-durable background queue.
-
-Set `ANALYTICS_PASSWORD` and `TICKET_PROVIDER=demo` in `.env` for an offline
-trial. The analytics panel listens on `http://127.0.0.1:8002/` and uses HTTP
-Basic authentication. To see both flows without Telegram or an external API, run
-`python scripts/demo_ticket_flow.py`. Jira Service Management, Zendesk and
-Usedesk adapters have mock contract tests; they still need credentials and
-validation against the team's test project. See
-[analytics and ticket setup](docs/analytics.md).
-
-## Local administration preview
-
-The optional FastAPI-Amis-Admin application displays questions, documents and
-observed Telegram users, and manages the bot allowlist. The `users` table is
-activity data; **Allowed Telegram users** is the access list. That tab supports
-manual add/edit/delete and importing `.xlsx` or `.csv` files. Its toolbar opens
-the invite-link manager. Set `TELEGRAM_BOT_USERNAME` in `.env` to enable link
-creation. When a user opens a valid Telegram deep link, the bot records the
-activation and adds the Telegram account to the allowlist. **Invite activations**
-shows those records. Optionally set `ACCESS_INVITE_NOTIFY_CHAT_ID` to receive a
-Telegram notification for each activation. Links have an expiry and use limit
-and can be revoked.
-
-The ordinary views use a read-only role. Allowlist, invitation, document-upload
-and document-deletion management use a separate role limited to those tables.
-The **Document upload queue** tab shows processing status; use `/documents/upload`
-to submit PDF, DOCX, XLSX or PPTX files. A separate worker runs the existing
-versioned ingest, render and extract pipeline. Successful imports appear in
-**Documents**, become searchable without restarting the bot, and their source
-links resolve to the stored original. Failed imports retain an error in the queue.
-
-The **Documents** tab has a **Delete** action. It removes the document, its
-chunks and stored version files from the knowledge base, but keeps the upload
-queue rows as history. The same file can be uploaded again afterwards; only a
-live stored version or an active queued/processing upload blocks duplicates.
-The admin container needs the `data/processed` volume for this, and the scoped
-admin role needs the deletion grants from `scripts/setup_admin_access.py`
-(rerun it after upgrading an existing installation).
-
-Install it in a separate environment: this admin version requires a different
-FastAPI version from the one the bot image may install.
-
-```bash
-python3 -m venv storage/admin-venv
-storage/admin-venv/bin/pip install -r requirements/admin.txt
-```
-
-Apply all migrations, then create the read-only role for panel
-views and a scoped role for allowlist, invitation and document-upload management:
-
-```bash
-DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' \
-  .venv/bin/alembic upgrade head
-
-DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' \
-ADMIN_READER_PASSWORD='READER_PASSWORD' \
-  storage/admin-venv/bin/python scripts/setup_admin_reader.py
-
-DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' \
-ADMIN_ACCESS_DATABASE_URL='postgresql+asyncpg://bot_admin_access:ACCESS_PASSWORD@127.0.0.1:5438/bot' \
-  storage/admin-venv/bin/python scripts/setup_admin_access.py
-
-export ADMIN_DATABASE_URL='postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot'
-export ADMIN_ACCESS_DATABASE_URL='postgresql+asyncpg://bot_admin_access:ACCESS_PASSWORD@127.0.0.1:5438/bot'
-export ADMIN_USERNAME='admin'
-export ADMIN_PASSWORD='CHOOSE_A_STRONG_PASSWORD'
-storage/admin-venv/bin/uvicorn app.admin.web:create_app --factory --host 127.0.0.1 --port 8001
-```
-
-Replace the example passwords; percent-encode special characters in URLs. The
-password for the panel is separate from the database password. Open
-`http://127.0.0.1:8001/admin/`; the panel redirects to its English sign-in page.
-For local upload processing, run `DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' .venv/bin/python scripts/document_worker.py` in a second terminal with the ingestion dependencies installed.
-Successful sign-in creates an eight-hour, HTTP-only session cookie. Keep the
-panel bound to localhost, or configure HTTPS and suitable access controls before
-exposing it beyond the machine. AMIS loads interface assets from `unpkg.com` by
-default.
-
-### Run the administration panel in Docker
-
-Prepare both database roles as shown above. Put the following values in the
-ignored file `storage/admin.env` (create the directory if needed):
+Create `storage/admin.env` (ignored by git, `chmod 600`):
 
 ```env
 ADMIN_DATABASE_URL=postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot
@@ -815,13 +130,8 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=CHOOSE_A_STRONG_PASSWORD
 ```
 
-Replace the example passwords and restrict the file to its owner, for example
-with `chmod 600 storage/admin.env`. Docker Compose points this URL at the
-`postgres` service inside its network; the same file also works for the local
-preview.
-
-Create both roles through the bot image, using the same passwords as in
-`storage/admin.env`:
+Create the roles through the bot image after the first stack start, when the bot
+has applied migrations:
 
 ```bash
 docker compose run --rm --no-deps \
@@ -833,68 +143,317 @@ docker compose run --rm --no-deps \
   bot python scripts/setup_admin_access.py
 ```
 
-The admin service starts with the normal stack. Build and control it with:
+Replace the example passwords and percent-encode special characters in the
+connection URLs.
+
+Then start the panel:
 
 ```bash
-docker compose up -d --build admin
+docker compose up -d admin
 docker compose logs -f admin
-docker compose stop admin
-docker compose start admin
 ```
 
-If `storage/admin.env` is missing, only the admin container fails; the other
-services continue to run.
+Rerun `setup_admin_access.py` after upgrading an existing installation; the
+document-deletion feature needs its added table grants.
 
-The address remains `http://127.0.0.1:8001/admin/`; `ADMIN_PORT` can change the
-host port. Stop any local uvicorn process already using this port first. A
-missing or incorrect reader password prevents the panel from accessing data.
+If `storage/admin.env` is missing, only the admin container fails. The rest of
+the stack continues to run.
 
-## Documentation-only answers
+### Documents
 
-The bot refuses common instruction overrides and unrelated writing/coding
-requests before calling the model. Questions and source text are treated as
-untrusted data. Model output must follow a fixed response schema and cite valid
-source IDs; malformed or uncited output is replaced with a fixed response.
-These controls reduce prompt-injection risk but do not guarantee semantic
-grounding or resistance to every jailbreak. See
-[the security notes](docs/prompt-injection.md) for controls and limitations.
+**Admin upload (recommended).** Open **Document upload queue → Upload document**
+and choose a PDF, DOCX, XLSX or PPTX. The file is staged in `data/inbox/`, queued
+in PostgreSQL, and processed by `document-worker` into versioned chunks under
+`data/processed/`. The next bot question uses the new document without a
+restart.
 
-## Retrieval
+The worker handles one document at a time. The queue shows 10 rows per page;
+use pagination to see older uploads. Reload the queue page to refresh progress.
+Stages are `ingest`, `render`, `image analysis`, `chunking` and `completed`.
 
-- `TOP_K` defaults to `2` initial seeds, matching `fix/visual-rag-evidence`.
-- BM25 uses the same search-only lexical hints as that branch. Evidence text
-  is unchanged; titles and document names are not repeated to inflate scores.
-- Table-of-contents chunks receive a score penalty for normal questions.
-  Useful prose under a contents heading remains searchable.
-- `SearchIndex.search` returns at most `top_k` matches; it does not append
-  visual fragments outside that limit.
-- The answer prompt explicitly tells the LLM to use diagram nodes/edges and
-  table rows/columns when present.
-- Context expansion (`app/rag/retrieve.py`) adds related chunks from the same
-  document/version up to a bounded limit (6 chunks / 12,000 characters) and
-  never truncates a chunk to fit.
-- Schedule/contact questions use at most two seeds, even with a larger
-  `TOP_K` override, so focused answers keep a small context.
-- Offline diagnostics: `python -m app.rag.inspect` and
-  `python -m app.rag.evaluate` (see `docs/visual-rag-plan.md`).
+If the same checksum is already stored or actively queued, the upload is
+recorded as `file already exists` and is not processed.
 
-## Supported source formats
+**Delete a document.** The **Documents** tab has a **Delete** action. It removes
+the document, its chunks and stored version files from the knowledge base, while
+keeping upload-queue history. The same file can be uploaded again afterwards.
+The admin container mounts `data/processed` read-write for this.
 
-- PDF
-- DOCX, XLSX, PPTX
-- PNG, JPEG, WebP, TIFF, BMP
-- text, Markdown, HTML, RST, AsciiDoc, TeX
-- JSON, JSONL, XML, TOML, YAML, INI
-- CSV, TSV
-- source code and common project files
+**Bulk ingest from `data/knowledge` (optional).** The bulk scanner processes PDFs
+only:
 
-Office files require LibreOffice for rendering. For Office extraction, the
-rendered PDF is used as the visual artifact; the original filename and version
-stay in chunk metadata.
+```bash
+cp new-document.pdf data/knowledge/
+docker compose --profile ingest run --rm ingest
+```
 
-Install LibreOffice through your system package manager so that `soffice` is
-available on `PATH`. If it is installed elsewhere, set `SOFFICE_PATH` or pass
-`--soffice`.
+Existing unchanged files use the extraction cache. Preview derived document IDs
+without processing:
+
+```bash
+docker compose --profile ingest run --rm ingest --dry-run
+```
+
+### Operations
+
+```bash
+docker compose ps
+docker compose logs -f bot
+docker compose logs -f document-worker
+docker compose stop
+docker compose start
+```
+
+Stop containers but keep PostgreSQL, Grafana and model-cache volumes:
+
+```bash
+docker compose --profile "*" down
+```
+
+Delete containers **and all stored data**, including the database, dashboards
+and model cache. This is destructive:
+
+```bash
+docker compose --profile "*" down -v
+```
+
+After changing `.env`, recreate the affected service; `restart` does not reload
+environment variables:
+
+```bash
+docker compose up -d --force-recreate bot
+docker compose up -d --force-recreate admin
+docker compose up -d --force-recreate document-worker
+```
+
+Rebuild after changing application code or Dockerfiles:
+
+```bash
+docker compose --profile ingest build
+docker compose up -d
+```
+
+Apply migrations manually if needed. The bot also does this automatically at
+startup:
+
+```bash
+docker compose run --rm --no-deps bot alembic upgrade head
+```
+
+### Docker disk maintenance
+
+```bash
+./scripts/docker_cleanup.sh
+```
+
+The script removes stopped one-shot containers, dangling images, unused networks
+and build cache older than 7 days. Named volumes are never pruned. Tune it with
+`BUILD_CACHE_TTL` or `--images`:
+
+```bash
+BUILD_CACHE_TTL=720h ./scripts/docker_cleanup.sh
+./scripts/docker_cleanup.sh --images
+./scripts/docker_cleanup.sh --all-cache
+```
+
+For an automated build with cleanup, use `./scripts/docker_build.sh`. Container
+logs are capped at 3 × 10 MB per service.
+
+## Run locally without Docker
+
+The normal Python launch is short. Docker is optional; the bot accepts either
+SQLite (default) or PostgreSQL.
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements/base.txt
+cp .env.example .env
+# edit TELEGRAM_BOT_TOKEN, LLM_BASE_URL, LLM_MODEL and LLM_API_KEY
+.venv/bin/python -m app
+```
+
+The bot applies database migrations on startup and creates `data/bot.sqlite3`
+when no `DATABASE_URL` is set. It can start without documents and will answer
+that no supporting fragments were found.
+
+For document processing, install the ingestion dependencies and LibreOffice for
+Office files:
+
+```bash
+.venv/bin/python -m pip install -r requirements/ingestion.txt
+```
+
+Optional local viewer:
+
+```bash
+.venv/bin/python -m uvicorn app.anchors.viewer:app --host 127.0.0.1 --port 8090
+```
+
+Manual single-document pipeline, if you are not using the admin worker:
+
+```bash
+.venv/bin/python -m app.rag.ingest "data/knowledge/travel.pdf" --document-id travel
+.venv/bin/python -m app.rag.render --all
+.venv/bin/python -m app.rag.extract --all
+```
+
+`app.rag.extract --pages 4,7` creates a partial debug extract that the bot
+ignores. `--all` commands process every stored version.
+
+### Local admin preview
+
+The admin panel has different FastAPI requirements from the bot, so use a
+separate environment:
+
+```bash
+python3 -m venv storage/admin-venv
+storage/admin-venv/bin/pip install -r requirements/admin.txt
+```
+
+Start the panel with the same `storage/admin.env` values used by Docker:
+
+```bash
+ADMIN_DATABASE_URL='postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot' \
+ADMIN_ACCESS_DATABASE_URL='postgresql+asyncpg://bot_admin_access:ACCESS_PASSWORD@127.0.0.1:5438/bot' \
+ADMIN_USERNAME=admin \
+ADMIN_PASSWORD=CHOOSE_A_STRONG_PASSWORD \
+  storage/admin-venv/bin/uvicorn app.admin.web:create_app \
+  --factory --host 127.0.0.1 --port 8001
+```
+
+For local uploads, also run `document-worker` from the main environment with
+`DATABASE_URL` and `DOCUMENTS_DIR` set. Keep the admin panel bound to localhost,
+or put it behind HTTPS and access controls. AMIS loads UI assets from
+`unpkg.com` by default.
+
+## Configuration
+
+Core variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `TELEGRAM_BOT_TOKEN` | — | Bot token from @BotFather |
+| `TELEGRAM_BOT_USERNAME` | — | Username without `@`; enables invite links |
+| `TELEGRAM_ALLOWED_USERNAMES` | empty: deny everyone | One-time allowlist bootstrap |
+| `ACCESS_INVITE_NOTIFY_CHAT_ID` | — | Optional Telegram chat for invite activations |
+| `SUPPORT_URL` | empty | Support button destination |
+| `LLM_BASE_URL` | local fallback | OpenAI-compatible base URL |
+| `LLM_MODEL` | `qwen3.8-flash` | Provider model ID |
+| `LLM_API_KEY` | `local` | Provider API key |
+| `LLM_SESSION_ID` | `innopolis-helper-bot` | Optional routing/session header |
+| `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Client identification |
+| `LLM_ANSWER_REASONING_EFFORT` | `minimal` | Answer reasoning effort |
+| `LLM_EXTRACTION_REASONING_EFFORT` | `low` | Extraction reasoning effort |
+| `EXTRACTION_VISION_CONCURRENCY` | `2` | Parallel picture/page vision calls |
+| `EXTRACTION_TEXT_CONCURRENCY` | `4` | Parallel chunk-grouping calls |
+| `EXTRACTION_REQUEST_TIMEOUT` | `180` | Extraction request timeout, seconds |
+| `EXTRACTION_MIN_IMAGE_PIXELS` | `1024` | Skip tiny decorative pictures; `0` disables |
+| `EXTRACTION_CACHE_ENABLED` | `true` | Cache raw extraction responses |
+| `EXTRACTION_CACHE_DIR` | `~/.cache/innopolis-helper-bot/vision` | Raw response cache |
+| `LLM_ENABLE_THINKING` | `auto` | Thinking mode for the tested OpenCode/qwen pair |
+| `LLM_THINKING_BUDGET` | provider default (`512`) | Thinking-token budget |
+| `ANSWER_MAX_COMPLETION_TOKENS` | `1400` | Thinking + answer token limit |
+| `ANSWER_MAX_TOKENS` | `600` | Answer output limit |
+| `TEMPERATURE` | `0.1` | Answer temperature |
+| `TOP_K` | `2` | Initial retrieval seeds |
+| `MIN_SCORE` | `0` | Minimum BM25 score |
+| `KNOWLEDGE_DIR` | `data/knowledge` | Bulk-ingest PDF directory |
+| `DOCUMENTS_DIR` | `data/processed/documents` | Versioned document store |
+| `DATABASE_PATH` | `data/bot.sqlite3` | SQLite path |
+| `DATABASE_URL` | — | Optional PostgreSQL URL |
+| `DOCUMENTS_BASE_URL` | — | Public viewer URL for signed links |
+| `DOCUMENT_LINK_SECRET` | — | HMAC secret for signed links |
+| `TICKET_PROVIDER` | empty: disabled | `demo`, `jsm`, `zendesk` or `usedesk` |
+| `TICKET_BASE_URL` | — | Ticket provider API URL |
+| `TICKET_API_TOKEN` | — | Ticket provider secret |
+| `TICKET_EMAIL` | — | Optional agent email |
+| `JIRA_SERVICE_DESK_ID` | — | Jira Service Management desk ID |
+| `JIRA_REQUEST_TYPE_ID` | — | Jira Service Management request type |
+| `USEDESK_CHANNEL_ID` | — | Usedesk channel ID |
+| `TICKET_WEB_BASE_URL` | — | Browser URL prefix for ticket links |
+| `ANALYTICS_USERNAME` | `admin` | Analytics HTTP Basic username |
+| `ANALYTICS_PASSWORD` | — | Analytics HTTP Basic password |
+| `ANALYTICS_AREAS_FILE` | — | Optional product-area mapping |
+| `ANALYTICS_SHOW_EXAMPLES` | `0` | Show anonymized examples |
+| `ANALYTICS_DEMO` | `0` | Generated demo cards without a database |
+| `ANALYTICS_PORT` | `8002` | Analytics host port |
+
+Docker-only values live in `.env` or `storage/admin.env`:
+
+| Variable | Purpose |
+| --- | --- |
+| `POSTGRES_PASSWORD` | PostgreSQL password; required by Compose |
+| `POSTGRES_PORT` | Host port for PostgreSQL, default `5438` |
+| `GRAFANA_ADMIN_PASSWORD` | Grafana administrator password |
+| `GRAFANA_DB_PASSWORD` | Grafana read-only database password |
+| `GRAFANA_PORT` | Grafana host port, default `3000` |
+| `VIEWER_PORT` | Viewer host port, default `8090` |
+| `ADMIN_PORT` | Admin host port, default `8001` |
+| `HOST_UID`, `HOST_GID` | Host ownership for ingestion files |
+| `ADMIN_DATABASE_URL` | Read-only PostgreSQL URL for admin views |
+| `ADMIN_ACCESS_DATABASE_URL` | Scoped URL for admin write actions |
+| `LLAMA_MODEL_FILE` | GGUF model filename for the optional `llm` profile |
+| `LLAMA_MMPROJ_FILE` | Multimodal projector filename for the `llm` profile |
+| `LLAMA_CTX` | Total llama.cpp context size |
+| `LLAMA_PARALLEL` | llama.cpp server slots; match extraction concurrency |
+
+`LLM_SESSION_ID` and `LLM_USER_AGENT` are optional for generic providers and
+required by some routed providers. Reasoning values are provider model
+parameters (`none`, `minimal`, `low`, `medium`, `high`).
+
+## Extraction and retrieval
+
+Every document is stored as an immutable version, rendered when needed, and
+extracted into versioned chunks. The bot reloads changed chunk manifests before
+each question, so uploads and deletions do not require a restart.
+
+- Docling extracts text, tables and picture regions.
+- Picture regions and low-text pages are analysed by the multimodal model.
+- Independent vision calls run in parallel; raw responses are cached per request.
+- Only accepted, validated visual items become retrieval sources.
+- BM25 supplies evidence to the answer model; answers must cite source IDs.
+- Retrieval context expansion is bounded and does not truncate chunks.
+- Diagram nodes/edges and table rows/columns in accepted visual chunks are
+  available to the answer prompt.
+
+Supported source formats include PDF, DOCX, XLSX, PPTX, images, text, Markdown,
+HTML, structured data and source code. The admin upload accepts PDF, DOCX, XLSX
+and PPTX; use the CLI for other formats. Office extraction requires LibreOffice,
+either installed locally or provided by the ingestion image. Set `SOFFICE_PATH`
+if `soffice` is not on `PATH`.
+
+## Access, tickets and analytics
+
+`TELEGRAM_ALLOWED_USERNAMES` bootstraps the allowlist once. After that, manage
+access in the admin panel's **Allowed Telegram users** tab. Invite links bind a
+Telegram ID to the allowlist and can have expiry/use limits. Access changes apply
+without restarting the bot.
+
+`ticket-worker` starts with the default stack and stays idle until
+`TICKET_PROVIDER` is configured. It stores a durable request immediately and
+records the external ticket ID after the provider confirms creation. Demo mode:
+
+```env
+TICKET_PROVIDER=demo
+```
+
+```bash
+docker compose up -d ticket-worker
+docker compose logs -f ticket-worker
+```
+
+Support analytics is optional:
+
+```env
+ANALYTICS_PASSWORD=replace-with-a-strong-password
+```
+
+```bash
+docker compose --profile analytics up -d analytics analytics-labeler
+```
+
+See [docs/analytics.md](docs/analytics.md) for provider details, review workflow
+and privacy notes.
 
 ## Tests
 
@@ -903,82 +462,56 @@ available on `PATH`. If it is installed elsewhere, set `SOFFICE_PATH` or pass
 .venv/bin/python -m pytest
 ```
 
-Install ingestion dependencies before running the full suite. Offline tests
-do not require model credentials.
+Offline tests do not require model credentials. Install ingestion dependencies
+before running the full suite.
 
 ## Troubleshooting
 
-### `TELEGRAM_BOT_TOKEN is missing`
+**The bot has no chunks.** It starts, but cannot answer from documents until an
+upload or bulk ingest succeeds. Check `docker compose logs -f document-worker`
+and `docker compose ps`.
 
-Create `.env` from `.env.example` and put the token from @BotFather into
-`TELEGRAM_BOT_TOKEN`.
+**An admin upload stays queued.** The worker processes one document at a time.
+A large PDF blocks later uploads. Do not delete the staged inbox file while the
+job is active.
 
-### Bot has no document chunks
+**Duplicate upload is rejected.** A stored version or a queued/processing upload
+has the same checksum. Delete the existing document in **Documents** if you want
+to replace it; completed queue history does not block a re-upload.
 
-The bot starts even when no chunks exist, but it cannot answer from the knowledge
-base. Process documents through the admin panel or run the versioned pipeline:
+**`Extraction is locked`.** A previous run was interrupted. Check that no worker
+is running, then remove the reported `.extract.lock`, `.ingest.lock` or
+`.render.lock` file.
 
-```bash
-.venv/bin/python -m app.rag.ingest "<source>" --document-id <id>
-.venv/bin/python -m app.rag.render --all
-.venv/bin/python -m app.rag.extract --all
-```
+**The model returns no JSON or empty chunks.** Confirm that the model accepts
+images, check `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY`, and retry. Raw
+responses are cached; changing the model or prompts invalidates them.
 
-For Docker, an admin upload or
-`docker compose --profile ingest run --rm ingest` is enough; the bot refreshes
-the index before the next question.
+**Office rendering fails.** Install LibreOffice and ensure `soffice` is on
+`PATH`, or set `SOFFICE_PATH` / pass `--soffice`.
 
-### Admin upload stays queued
+**Access denied.** Check the sender's Telegram username and the active entry in
+**Allowed Telegram users**. The environment allowlist is only a one-time
+bootstrap.
 
-`document-worker` processes one job at a time. A large PDF blocks later uploads
-until it finishes. Check:
-
-```bash
-docker compose logs -f document-worker
-```
-
-Do not delete the staged file while the job is active.
-
-### Network is still in use
-
-Optional analytics containers keep the Compose network attached. Stop and
-remove all profiles together:
+**Network is still in use after `down`.** Stop optional profiles too:
 
 ```bash
 docker compose --profile "*" down
 ```
 
-### `Extraction is locked`
+Keep `.env`, `storage/admin.env`, internal documents and generated artifacts out
+of commits.
 
-A previous extraction was interrupted. Check that no extraction process is
-running, then remove:
+## Credits
 
-```text
-<version>/.extract.lock
-```
+The admin panel is based on
+[FastAPI-Amis-Admin](https://github.com/amisadmin/fastapi-amis-admin), with the
+[AMIS](https://github.com/baidu/amis) UI framework.
 
-The same applies to `.ingest.lock` and `.render.lock`.
-
-### Model returns no JSON or empty chunks
-
-- Confirm the model supports images.
-- Check `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY`.
-- Some providers require `LLM_SESSION_ID`; the client sends it as
-  `x-opencode-session`.
-- Re-run extraction; the cache key changes when the model or prompts change.
-- If the model still fails, extraction falls back to deterministic chunks for
-  the affected elements.
-
-### Office rendering fails
-
-Install LibreOffice and ensure `soffice` is on `PATH`, or set `SOFFICE_PATH` /
-pass `--soffice`. Rendering Office requires LibreOffice; extraction can then use
-the rendered PDF.
-
-### Access denied
-
-Check that the sender has a Telegram username and an active entry in the admin
-panel's **Allowed Telegram users** tab. `TELEGRAM_ALLOWED_USERNAMES` is only used
-for the one-time database bootstrap.
-
-Keep `.env`, internal documents, and generated artifacts out of commits.
+Additional building blocks: [aiogram](https://github.com/aiogram/aiogram) for
+Telegram, [Docling](https://github.com/docling-project/docling) for document
+parsing, [PyMuPDF](https://github.com/pymupdf/PyMuPDF) for PDF rendering,
+[FastAPI](https://fastapi.tiangolo.com/) and
+[SQLAlchemy](https://www.sqlalchemy.org/), and
+[Grafana](https://grafana.com/) for dashboards.
