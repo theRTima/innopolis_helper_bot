@@ -44,7 +44,13 @@ LLM_API_KEY=your-api-key
 POSTGRES_PASSWORD=replace-with-a-strong-password
 GRAFANA_ADMIN_PASSWORD=replace-with-another-password
 GRAFANA_DB_PASSWORD=replace-with-a-reader-password
+DOCUMENTS_BASE_URL=http://127.0.0.1:8090
+DOCUMENT_LINK_SECRET=replace-with-a-long-random-secret
 ```
+
+`DOCUMENTS_BASE_URL` and `DOCUMENT_LINK_SECRET` enable signed source links in
+bot answers. Both must be set together. For Telegram users on other devices,
+use a publicly reachable HTTPS viewer URL, normally through a reverse proxy.
 
 `TELEGRAM_ALLOWED_USERNAMES` is required for access. An empty list denies
 everyone. Use Telegram usernames, not display names.

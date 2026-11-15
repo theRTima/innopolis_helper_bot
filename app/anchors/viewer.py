@@ -24,6 +24,18 @@ def create_app(
     signing_secret = secret if secret is not None else os.getenv("DOCUMENT_LINK_SECRET", "")
     app = FastAPI(title="Knowledge document viewer", docs_url=None, redoc_url=None)
 
+    @app.get("/", response_class=HTMLResponse)
+    async def index() -> HTMLResponse:
+        return HTMLResponse(
+            "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width\">"
+            "<title>Document viewer</title>"
+            "<body style=\"font-family:system-ui,sans-serif;margin:3rem\">"
+            "<h1>Document viewer is running</h1>"
+            "<p>Open a document link sent by the bot.</p>"
+            "</body></html>"
+        )
+
     def verify(document_id: str, expires: int, signature: str) -> Path:
         if not signing_secret or expires < int(time.time()):
             raise HTTPException(status_code=403, detail="Ссылка недействительна или устарела")
