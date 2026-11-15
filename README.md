@@ -48,7 +48,9 @@ docker compose --profile ingest run --rm ingest
 docker compose up -d bot viewer
 ```
 
-The bot requires at least one ready chunk set and applies migrations at startup.
+The ingestion image installs CPU-only PyTorch to avoid unnecessary CUDA/NVIDIA
+libraries. The bot requires at least one ready chunk set and applies migrations
+at startup.
 
 Add or replace PDFs later and run the same command again. Existing unchanged
 files use the extraction cache; new or changed files are processed
