@@ -58,6 +58,13 @@ class RateLimiter:
         self._last[key] = now
         return True
 
+    def retry_after(self, user_id: int, chat_id: int) -> float:
+        """Seconds left before this user/chat may send another question."""
+        last = self._last.get((user_id, chat_id))
+        if last is None:
+            return 0.0
+        return max(0.0, self.seconds - (time.monotonic() - last))
+
 
 class SpamCooldown:
     """Count every message per user, including messages rejected by RateLimiter."""

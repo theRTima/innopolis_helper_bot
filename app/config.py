@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +14,20 @@ load_dotenv()
 
 def _path(name: str, default: str) -> Path:
     return Path(os.getenv(name, default)).expanduser()
+
+
+def _allowed_usernames(value: str) -> frozenset[str]:
+    usernames = frozenset(
+        item.strip().removeprefix("@").lower()
+        for item in value.split(",")
+        if item.strip()
+    )
+    if any(not re.fullmatch(r"[a-z0-9_]+", name) for name in usernames):
+        raise ValueError(
+            "TELEGRAM_ALLOWED_USERNAMES must contain comma-separated "
+            "Telegram usernames, optionally prefixed with @"
+        )
+    return usernames
 
 
 @dataclass(frozen=True)
@@ -39,6 +54,7 @@ class Settings:
     llm_thinking_budget: int | None = None
     answer_max_completion_tokens: int = 1400
     support_url: str = ""
+    telegram_allowed_usernames: frozenset[str] = frozenset()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -71,9 +87,7 @@ class Settings:
             top_k=int(os.getenv("TOP_K", "2")),
             min_score=float(os.getenv("MIN_SCORE", "0")),
             knowledge_dir=_path("KNOWLEDGE_DIR", "data/knowledge"),
-            documents_dir=_path(
-                "DOCUMENTS_DIR", "data/processed/documents"
-            ),
+            documents_dir=_path("DOCUMENTS_DIR", "data/processed/documents"),
             database_path=_path("DATABASE_PATH", "data/bot.sqlite3"),
             database_url=os.getenv("DATABASE_URL", "").strip(),
             documents_base_url=os.getenv("DOCUMENTS_BASE_URL", "").rstrip("/"),
@@ -86,6 +100,9 @@ class Settings:
                 os.getenv("ANSWER_MAX_COMPLETION_TOKENS", "1400")
             ),
             support_url=os.getenv("SUPPORT_URL", "").strip(),
+            telegram_allowed_usernames=_allowed_usernames(
+                os.getenv("TELEGRAM_ALLOWED_USERNAMES", "")
+            ),
         )
 
     def validate(self) -> None:

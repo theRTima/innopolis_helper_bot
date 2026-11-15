@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 
 from aiogram import F, Router
@@ -121,7 +122,11 @@ async def handle_question(
         await db.suppress_delivery(question_id=question_id)
         return
     if cooldown_state == "triggered":
-        notice = "Слишком много сообщений. Подождите 30 секунд и попробуйте снова."
+        notice = (
+            "Слишком много сообщений: не более "
+            f"{spam_cooldown.limit - 1} за {spam_cooldown.window:g} секунд. "
+            f"Подождите {spam_cooldown.cooldown:g} секунд и попробуйте снова."
+        )
         try:
             await message.answer(notice)
         except Exception:
@@ -130,12 +135,25 @@ async def handle_question(
         await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=True)
         return
     if not rate_limiter.allow(message.from_user.id, message.chat.id):
+        wait = max(
+            1,
+            math.ceil(
+                rate_limiter.retry_after(
+                    message.from_user.id, message.chat.id
+                )
+            ),
+        )
+        notice = (
+            "Слишком частые запросы: один вопрос можно отправлять "
+            f"раз в {rate_limiter.seconds:g} секунды. "
+            f"Подождите {wait} секунд."
+        )
         try:
-            await message.answer("Подождите немного перед следующим вопросом.")
+            await message.answer(notice)
         except Exception:
-            await db.save_delivery(question_id=question_id, answer="Ограничение частоты", sources=[], status="unverified", delivered=False)
+            await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=False)
             raise
-        await db.save_delivery(question_id=question_id, answer="Подождите немного перед следующим вопросом.", sources=[], status="unverified", delivered=True)
+        await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=True)
         return
 
     try:

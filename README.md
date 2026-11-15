@@ -1,18 +1,134 @@
 # Innopolis Helper Bot
 
-Telegram assistant that answers employee questions from internal documentation.
+Telegram assistant for internal documentation, with source citations, feedback,
+and support escalation. Docling and a remote multimodal model prepare documents;
+BM25 retrieval supplies evidence to an OpenAI-compatible answer model.
 
-The repository contains both:
+## Docker setup
 
-- the Telegram bot and BM25 retrieval layer;
-- the document ingestion pipeline that turns PDF, Office, image and text files
-  into retrieval-ready chunks.
+Install Docker with Compose. The stack provides:
 
-The pipeline uses **Docling** for text, tables and document structure, and a
-**remote multimodal model** for diagrams, screenshots and unreadable pages. No
-local MLX model is required.
+- `postgres` — database
+- `bot` — Telegram polling process
+- `viewer` — signed document viewer on loopback
+- `ingest` — one-shot scanner that runs `ingest -> render -> extract` for every
+  PDF in `data/knowledge`
 
-## Requirements
+Get a Telegram bot token from @BotFather and an image-capable model endpoint
+for extraction. Start by creating the environment file:
+
+```bash
+cp .env.example .env
+```
+
+Set at least:
+
+```env
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_ALLOWED_USERNAMES=@alice,bob
+LLM_BASE_URL=https://your-provider.example.com/v1
+LLM_MODEL=your-multimodal-model-id
+LLM_API_KEY=your-api-key
+POSTGRES_PASSWORD=replace-with-a-strong-password
+GRAFANA_ADMIN_PASSWORD=replace-with-another-password
+GRAFANA_DB_PASSWORD=replace-with-a-reader-password
+```
+
+Put all PDFs into `data/knowledge/`. No per-file environment variables are
+needed. Document IDs are derived from filenames, while existing stored manifests
+keep their current IDs.
+
+Build images, start PostgreSQL, and process documents before starting the bot:
+
+```bash
+mkdir -p data/processed
+docker compose --profile ingest build bot viewer ingest
+docker compose up -d --wait postgres
+docker compose --profile ingest run --rm ingest
+docker compose up -d bot viewer
+```
+
+The ingestion image installs CPU-only PyTorch to avoid unnecessary CUDA/NVIDIA
+libraries. The bot requires at least one ready chunk set and applies migrations
+at startup.
+
+Add or replace PDFs later and run the same command again. Existing unchanged
+files use the extraction cache; new or changed files are processed
+automatically. The bot loads chunks at startup, so restart it after ingestion:
+
+```bash
+docker compose restart bot
+```
+
+To preview the derived document IDs without running extraction:
+
+```bash
+docker compose --profile ingest run --rm ingest --dry-run
+```
+
+The ingestion container writes to `./data/processed`; the bot reads that host
+directory read-only. `./data/knowledge` is also mounted read-only. On Linux,
+set `HOST_UID` and `HOST_GID` in `.env` to your user ID so generated files keep
+the expected ownership.
+
+If the model endpoint runs on the host, set:
+
+```env
+LLM_BASE_URL=http://host.docker.internal:8081/v1
+```
+
+Grafana is available at `http://localhost:3000/d/bot-analytics`. Set
+`GRAFANA_ADMIN_PASSWORD` and `GRAFANA_DB_PASSWORD` in `.env`, then initialize
+the aggregate views and their read-only database role once after migrations:
+
+```bash
+docker compose run --rm --no-deps bot alembic upgrade head
+docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
+docker compose up -d grafana
+```
+
+Log in as `admin` using `GRAFANA_ADMIN_PASSWORD`. For escalation set
+`SUPPORT_URL` to an HTTPS or Telegram link. After four consecutive clarification
+requests the bot sends a button with that link; delivery indicates that Telegram
+accepted the button, not that a specialist received the request. Older records
+without explicit user feedback have an unknown outcome. Re-run the setup script
+after upgrading the database to refresh the aggregate views.
+
+The bot rate-limits individual questions to one every three seconds. Eight
+messages from the same user within five seconds trigger a 30-second cooldown.
+The rate-limit reply states the allowed interval and the remaining wait; the
+cooldown reply states the message limit, the time window and the cooldown.
+After the first cooldown warning, further messages during the cooldown are
+logged but receive no reply. Limits are held in process memory, so they reset
+on restart and are not shared between bot instances.
+
+The ingestion image includes LibreOffice. The Docker scanner currently discovers
+PDFs only; use the local pipeline below for other formats.
+
+Logs and shutdown:
+
+```bash
+docker compose logs -f bot
+docker compose down
+```
+
+## Telegram access
+
+Set `TELEGRAM_ALLOWED_USERNAMES=@alice,bob` in `.env`. Entries are
+comma-separated; `@` is optional and matching ignores case. Use Telegram
+usernames, not display names. An empty list denies everyone, and users without
+a username cannot access the bot. Messages, commands, and feedback callbacks
+are checked before bot handlers run. Access follows the current username;
+update the list when a user changes it.
+
+Restart local runs after editing `.env`. Docker environment changes require
+recreating the bot container:
+
+```bash
+docker compose up -d --force-recreate bot
+```
+
+## Local Python setup
 
 - Python 3.11+
 - A Telegram bot token from @BotFather
@@ -28,7 +144,7 @@ Python dependencies are split into:
 | `requirements/ingestion.txt` | Docling, Jinja2, PyMuPDF |
 | `requirements/dev.txt` | Test and lint dependencies |
 
-## 1. Install
+### Install dependencies
 
 ```bash
 python3 -m venv .venv
@@ -36,14 +152,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements/ingestion.txt
 ```
 
-If the environment has no `pip`, install with `uv` instead:
-
-```bash
-uv pip install --python .venv/bin/python -r requirements/base.txt
-uv pip install --python .venv/bin/python -r requirements/ingestion.txt
-```
-
-## 2. Configure `.env`
+### Configure `.env`
 
 ```bash
 cp .env.example .env
@@ -53,6 +162,7 @@ Minimum configuration:
 
 ```env
 TELEGRAM_BOT_TOKEN=...
+TELEGRAM_ALLOWED_USERNAMES=@alice,bob
 
 LLM_BASE_URL=https://your-provider.example.com/v1
 LLM_MODEL=your-multimodal-model-id
@@ -78,6 +188,8 @@ images.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token |
+| `TELEGRAM_ALLOWED_USERNAMES` | Empty: deny everyone | Comma-separated username whitelist |
+| `SUPPORT_URL` | Empty | Support button destination |
 | `LLM_BASE_URL` | local fallback | OpenAI-compatible base URL, usually ending in `/v1` |
 | `LLM_MODEL` | `qwen3.8-flash` | Provider model ID |
 | `LLM_API_KEY` | `local` | Provider API key |
@@ -106,10 +218,10 @@ for generic OpenAI-compatible providers.
 Reasoning levels are provider model parameters (`none`, `minimal`, `low`,
 `medium`, `high`). Extraction uses `low`; answer generation uses a bounded
 thinking budget for the tested OpenCode/qwen pair. For other providers/models,
-`LLM_ANSWER_REASONING_EFFORT` is used when no thinking budget is active.
+`LLM_ANSWER_REASONING_EFFORT` is used when thinking is not explicitly enabled.
 See `docs/answer-latency.md` for measurements and provider constraints.
 
-## 3. Prepare documentation
+### Prepare documentation
 
 The project uses one document workflow: every source is stored as an immutable
 version, rendered when needed, and extracted into versioned chunks.
@@ -117,7 +229,7 @@ version, rendered when needed, and extracted into versioned chunks.
 The examples use `travel.pdf` and `furniture.pdf` as placeholders. Replace them
 with the actual files under `data/knowledge/`.
 
-### Pipeline
+#### Pipeline
 
 ```bash
 # 1. Store an immutable version
@@ -142,53 +254,7 @@ Batch mode:
 .venv/bin/python -m app.rag.extract --all
 ```
 
-The console scripts are also available after `pip install -e .`:
-
-```bash
-.venv/bin/rag-ingest ...
-.venv/bin/rag-render ...
-.venv/bin/rag-extract ...
-```
-
-### Old commands
-
-Commands from older versions are no longer valid:
-
-```text
-python -m rag_pipeline.ingest   # old
-python -m rag_pipeline.render   # old
-python -m rag_pipeline.extract  # old
-```
-
-Use the `app.rag` module paths or the console scripts instead. If you see
-`ModuleNotFoundError: No module named 'rag_pipeline'`, the command is outdated.
-
-### Add another PDF
-
-For example, to add `furniture.pdf`:
-
-```bash
-.venv/bin/python -m app.rag.ingest \
-  "data/knowledge/furniture.pdf" \
-  --document-id furniture
-```
-
-The ingest command prints the version path. Extract that version:
-
-```bash
-.venv/bin/python -m app.rag.extract \
-  "data/processed/documents/furniture/sha256-<hash>"
-```
-
-Rendering is optional for a PDF and required for Office files:
-
-```bash
-.venv/bin/python -m app.rag.render \
-  "data/processed/documents/furniture/sha256-<hash>" \
-  --dpi 150
-```
-
-### Debug a single version
+#### Debug a single version
 
 ```bash
 .venv/bin/python -m app.rag.extract \
@@ -198,7 +264,7 @@ Rendering is optional for a PDF and required for Office files:
 
 Debug extracts have `status: partial` and are ignored by the bot.
 
-## 4. Start the bot
+### Start the bot
 
 ```bash
 .venv/bin/python -m app
@@ -212,140 +278,26 @@ Startup checks:
 4. The LLM client is created.
 
 If a PDF in `KNOWLEDGE_DIR` has no versioned chunks, it is skipped with a
-warning and remains unavailable to the bot. At least one ready versioned chunk
-set is required for startup.
+warning and remains unavailable to the bot. At least one usable chunk set is
+required for startup.
 
-## Docker launch
+### Optional document viewer
 
-To run the bot, viewer and database in containers, use this section instead of
-the manual Python setup above. The Compose stack provides:
-
-- `postgres` — database
-- `bot` — Telegram polling process
-- `viewer` — signed document viewer on loopback
-- `ingest` — one-shot scanner that runs `ingest -> render -> extract` for every
-  PDF in `data/knowledge`
-- `llama` — optional local llama.cpp server under the `llm` profile
-
-Start by creating the environment file:
-
-```bash
-cp .env.example .env
-```
-
-Set at least:
+Set both values in `.env`:
 
 ```env
-TELEGRAM_BOT_TOKEN=...
-LLM_BASE_URL=https://your-provider.example.com/v1
-LLM_MODEL=your-multimodal-model-id
-LLM_API_KEY=your-api-key
-POSTGRES_PASSWORD=change-me
+DOCUMENTS_BASE_URL=http://127.0.0.1:8090
+DOCUMENT_LINK_SECRET=some-long-random-secret
 ```
 
-Put all PDFs into `data/knowledge/`. No per-file environment variables are
-needed. Document IDs are derived from filenames, while existing stored manifests
-keep their current IDs.
-
-Docker files:
-
-```text
-Dockerfile          # bot/viewer runtime
-Dockerfile.ingest   # ingestion image with Docling and LibreOffice
-docker-compose.yaml
-.dockerignore
-```
-
-`Dockerfile.ingest` installs CPU-only PyTorch so the image does not download
-CUDA/NVIDIA libraries that are unnecessary for document extraction.
-
-Build and start:
+Start the viewer:
 
 ```bash
-docker compose build
-docker compose --profile ingest build
-docker compose up -d postgres bot viewer
+.venv/bin/python -m uvicorn app.anchors.viewer:app --host 127.0.0.1 --port 8090
 ```
 
-Process every PDF currently in `data/knowledge`:
-
-```bash
-docker compose --profile ingest run --rm ingest
-```
-
-Add or replace PDFs later and run the same command again. Existing unchanged
-files use the extraction cache; new or changed files are processed
-automatically. The bot loads chunks at startup, so restart it after ingestion:
-
-```bash
-docker compose restart bot
-```
-
-To preview the derived document IDs without running extraction:
-
-```bash
-docker compose --profile ingest run --rm ingest --dry-run
-```
-
-The single-file helper is still available for local/manual runs:
-
-```bash
-.venv/bin/python scripts/docker_pipeline.py \
-  --source "data/knowledge/travel.pdf" \
-  --document-id travel
-```
-
-The Docker `ingest` service itself always scans the whole knowledge directory.
-
-The ingestion container writes to `./data/processed`; the bot reads that host
-directory read-only. `./data/knowledge` is also mounted read-only. On Linux,
-set `HOST_UID` and `HOST_GID` in `.env` to your user ID so generated files keep
-the expected ownership.
-
-If the model endpoint runs on the host, set:
-
-```env
-LLM_BASE_URL=http://host.docker.internal:8081/v1
-```
-
-The optional local llama.cpp profile can be started with:
-
-```bash
-docker compose --profile llm up -d llama
-```
-
-Grafana is available at `http://localhost:3000/d/bot-analytics`. Set
-`GRAFANA_ADMIN_PASSWORD` and `GRAFANA_DB_PASSWORD` in `.env`, then initialize
-the aggregate views and their read-only database role once after migrations:
-
-```bash
-docker compose run --rm --no-deps bot alembic upgrade head
-docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
-docker compose up -d grafana
-```
-
-Log in as `admin` using `GRAFANA_ADMIN_PASSWORD`. For escalation set
-`SUPPORT_URL` to an HTTPS or Telegram link. After four consecutive clarification
-requests the bot sends a button with that link; delivery indicates that Telegram
-accepted the button, not that a specialist received the request. Older records
-without explicit user feedback have an unknown outcome. Re-run the setup script
-after upgrading the database to refresh the aggregate views.
-
-The bot rate-limits individual questions to one every three seconds. Eight
-messages from the same user within five seconds trigger a 30-second cooldown;
-after the first warning, further messages during the cooldown are logged but
-receive no reply. Limits are held in process memory, so they reset on restart
-and are not shared between bot instances.
-
-Office ingestion works because `Dockerfile.ingest` installs LibreOffice by
-default; set `--build-arg INSTALL_OFFICE=0` to skip it.
-
-Logs and shutdown:
-
-```bash
-docker compose logs -f bot
-docker compose down
-```
+The viewer serves signed source links for PDF and Office documents. The viewer reads originals from `KNOWLEDGE_DIR`. Remote users need a reachable
+HTTPS URL, usually through a reverse proxy.
 
 ## Local administration preview
 
@@ -409,66 +361,7 @@ The address remains `http://127.0.0.1:8001/admin/`; `ADMIN_PORT` can change the
 host port. Stop any local uvicorn process already using this port first. A
 missing or incorrect reader password prevents the panel from accessing data.
 
-## 5. Optional document viewer
-
-Set both values in `.env`:
-
-```env
-DOCUMENTS_BASE_URL=http://127.0.0.1:8000
-DOCUMENT_LINK_SECRET=some-long-random-secret
-```
-
-Start the viewer:
-
-```bash
-.venv/bin/uvicorn app.anchors.viewer:app --host 127.0.0.1 --port 8000
-```
-
-The viewer serves signed source links for PDF and Office documents. The current
-viewer reads originals from `KNOWLEDGE_DIR`; linking directly to versioned render
-artifacts is a future improvement.
-
-## Pipeline overview
-
-```text
-data/knowledge/*.pdf
-        │
-        ▼
-app.rag.ingest
-        │
-        ├── app.rag.render
-        │     └── pages/frames/HTML previews
-        │
-        └── app.rag.extract
-              └── versioned chunks
-        │
-        ▼
-app.rag.index (BM25)
-        │
-        ▼
-app.bot.handlers + app.llm.client
-        │
-        ▼
-Telegram answer + citations + feedback
-        │
-        ▼
-SQLite/PostgreSQL
-```
-
-### What extraction does
-
-1. Docling extracts text, headings, lists, tables and picture regions.
-2. Running headers/footers and picture-OCR noise are removed.
-3. Pictures and unreadable pages are sent to the multimodal model with
-   `app/rag/extraction/prompts/image_analysis.j2`.
-4. Analysis items become normalized elements with source references.
-5. `app/rag/extraction/prompts/vision_chunker.j2` groups those references.
-6. The application resolves references back to text and structured data.
-7. The model never copies source text into the final chunk; it only groups
-   references, so malformed model output cannot silently rewrite facts.
-8. Missing structured elements are recovered deterministically.
-
-### Retrieval behavior
+## Retrieval
 
 - `TOP_K` defaults to `2` initial seeds, matching `fix/visual-rag-evidence`.
 - BM25 uses the same search-only lexical hints as that branch. Evidence text
@@ -486,59 +379,6 @@ SQLite/PostgreSQL
   `TOP_K` override, so focused answers keep a small context.
 - Offline diagnostics: `python -m app.rag.inspect` and
   `python -m app.rag.evaluate` (see `docs/visual-rag-plan.md`).
-
-## Storage layout
-
-### Versioned store
-
-```text
-data/processed/documents/<document-id>/sha256-<hash>/
-  original.<ext>
-  manifest.json
-  renders/render-<hash>/
-    render_manifest.json
-    index.html
-    document.pdf            # Office only
-    pages/page_0001.png
-    frames/frame_0001.png
-  chunks/chunk-<hash>/
-    chunks.jsonl
-    chunks.md
-    chunk_manifest.json
-```
-
-- `manifest.json` describes the immutable upload.
-- `render_manifest.json` describes a cached visual rendition.
-- `chunk_manifest.json` describes a cached extraction.
-- Extraction and rendering are cached by configuration hash.
-- Debug extracts with `--pages` are marked `partial` and skipped by the bot.
-
-### Chunk schema
-
-```json
-{
-  "id": "travel:sha256-...:p7:c2",
-  "source": "travel.pdf",
-  "document_id": "travel",
-  "version_id": "sha256-...",
-  "page": 7,
-  "page_to": 7,
-  "chunk_index": 2,
-  "origin": "docling",
-  "type": "text",
-  "title": "5 Instructions",
-  "content": "...",
-  "data": null,
-  "text": "title + content + flattened data",
-  "locator": {"kind": "pdf-page", "value": 7}
-}
-```
-
-Types: `text`, `table`, `diagram`, `screenshot`, `form`, `image`, `mixed`.
-
-Origins: `docling`, `vision`, `mixed`, `text`.
-
-The bot searches `text` and passes `content`/`data` context to the LLM.
 
 ## Supported source formats
 
@@ -565,11 +405,8 @@ available on `PATH`. If it is installed elsewhere, set `SOFFICE_PATH` or pass
 .venv/bin/python -m pytest
 ```
 
-Or:
-
-```bash
-.venv/bin/python -m unittest discover -s tests -v
-```
+Install ingestion dependencies before running the full suite. Offline tests
+do not require model credentials.
 
 ## Troubleshooting
 
@@ -584,16 +421,6 @@ Run the versioned pipeline:
 
 ```bash
 .venv/bin/python -m app.rag.ingest "<source>" --document-id <id>
-.venv/bin/python -m app.rag.render --all
-.venv/bin/python -m app.rag.extract --all
-```
-
-### `Unprocessed PDFs: ...`
-
-A PDF in `data/knowledge/` has no versioned chunks. Run:
-
-```bash
-.venv/bin/python -m app.rag.ingest "data/knowledge/<file>.pdf" --document-id <id>
 .venv/bin/python -m app.rag.render --all
 .venv/bin/python -m app.rag.extract --all
 ```
@@ -625,25 +452,9 @@ Install LibreOffice and ensure `soffice` is on `PATH`, or set `SOFFICE_PATH` /
 pass `--soffice`. Rendering Office requires LibreOffice; extraction can then use
 the rendered PDF.
 
-## Known limitations
+### Access denied
 
-- Docling can misclassify a numbered heading as a list item; page-level heading
-  recovery handles common cases.
-- Docling only reports raster pictures. A diagram drawn entirely with vector
-  shapes may not reach the vision model.
-- Remote model output is nondeterministic. Structured elements that the model
-  omits are recovered by deterministic fallback, but text grouping can vary
-  between runs.
-- Office page numbers refer to LibreOffice-rendered pages, not logical DOCX
-  paragraphs or PPTX slides.
-- The viewer still serves `KNOWLEDGE_DIR` originals; versioned render links are
-  not wired yet.
-- BM25 retrieval is lexical. There is no vector index yet.
+Check the sender's current username against `TELEGRAM_ALLOWED_USERNAMES`.
+Restart locally or recreate the Docker bot container after configuration changes.
 
-## Repository notes
-
-- `.env` is ignored and must not be committed.
-- `data/processed/` is ignored; runtime chunks and manifests are local artifacts.
-- Internal PDFs in `data/knowledge/` should not be committed.
-- Do not edit files inside a stored version directory; create a new version
-  instead.
+Keep `.env`, internal documents, and generated artifacts out of commits.
