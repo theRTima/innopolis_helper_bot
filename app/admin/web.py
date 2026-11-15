@@ -36,22 +36,33 @@ class CleanAdminSite(AdminSite):
         app.logo = None
         app.header = None
         app.footer = None
+        app.css = """
+            .cxd-Layout-body,
+            .cxd-Layout-content,
+            .cxd-Page {
+                background: #e9eef6 !important;
+            }
+            .cxd-Layout-aside,
+            .cxd-Layout-brandBar {
+                background: #dbe5f2 !important;
+            }
+        """
         app.cssVars = {
-            "--Layout-body-bg": "#f6f7fa",
-            "--Page-main-bg": "#f6f7fa",
-            "--Layout-aside-bg": "#eef3fb",
-            "--Layout-aside-color": "#3f4c63",
-            "--Layout-asideLink-color": "#465268",
-            "--Layout-asideLink-iconColor": "#607089",
+            "--Layout-body-bg": "#e9eef6",
+            "--Page-main-bg": "#e9eef6",
+            "--Layout-aside-bg": "#dbe5f2",
+            "--Layout-aside-color": "#2c3a50",
+            "--Layout-asideLink-color": "#3c4b63",
+            "--Layout-asideLink-iconColor": "#54657f",
             "--Layout-asideLink-onHover-color": "#172033",
             "--Layout-asideLink-onHover-iconColor": "#244ce0",
-            "--Layout-aside-onHover-bg": "#e2e9f6",
+            "--Layout-aside-onHover-bg": "#cedaeb",
             "--Layout-asideLink-onActive-color": "#244ce0",
-            "--Layout-aside-onAcitve-bg": "#d6e3ff",
-            "--Layout-aside-subList-bg": "#e7eef9",
-            "--Layout-asideLabel-color": "#6f7d92",
-            "--Layout-asideDivider-bg": "#d9e2ef",
-            "--Layout-brand-bg": "#eef3fb",
+            "--Layout-aside-onAcitve-bg": "#bfd2f1",
+            "--Layout-aside-subList-bg": "#d2deee",
+            "--Layout-asideLabel-color": "#66758c",
+            "--Layout-asideDivider-bg": "#c7d4e6",
+            "--Layout-brand-bg": "#dbe5f2",
             "--Layout-brand-color": "#172033",
             "--Layout-brandBar-color": "#172033",
         }
