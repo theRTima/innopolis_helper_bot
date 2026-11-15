@@ -64,10 +64,8 @@ services:
       timeout: 5s
       retries: 3
 
-  # One-shot versioned pipeline: ingest -> render -> extract.
-  # Requires INGEST_SOURCE and INGEST_DOCUMENT_ID in .env, or pass them:
-  #   docker compose run --rm ingest --source /app/data/knowledge/file.pdf \
-  #     --document-id travel
+  # One-shot versioned pipeline for every PDF currently in data/knowledge.
+  # Add files to ./data/knowledge and rerun; no .env changes are required.
   ingest:
     <<: *app
     build:
@@ -77,12 +75,12 @@ services:
     profiles: ["ingest"]
     restart: "no"
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
-    entrypoint: ["python", "scripts/docker_pipeline.py"]
+    entrypoint: ["python", "scripts/docker_ingest_all.py"]
     command:
-      - "--source"
-      - "${INGEST_SOURCE:-}"
-      - "--document-id"
-      - "${INGEST_DOCUMENT_ID:-travel}"
+      - "--knowledge-dir"
+      - "/app/data/knowledge"
+      - "--storage-root"
+      - "/app/data/processed/documents"
     volumes:
       - ./data/knowledge:/app/data/knowledge:ro
       - ./data/processed:/app/data/processed

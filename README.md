@@ -223,7 +223,8 @@ the manual Python setup above. The Compose stack provides:
 - `postgres` — database
 - `bot` — Telegram polling process
 - `viewer` — signed document viewer on loopback
-- `ingest` — one-shot versioned pipeline (`ingest -> render -> extract`)
+- `ingest` — one-shot scanner that runs `ingest -> render -> extract` for every
+  PDF in `data/knowledge`
 - `llama` — optional local llama.cpp server under the `llm` profile
 
 Start by creating the environment file:
@@ -240,9 +241,11 @@ LLM_BASE_URL=https://your-provider.example.com/v1
 LLM_MODEL=your-multimodal-model-id
 LLM_API_KEY=your-api-key
 POSTGRES_PASSWORD=change-me
-INGEST_SOURCE=/app/data/knowledge/travel.pdf
-INGEST_DOCUMENT_ID=travel
 ```
+
+Put all PDFs into `data/knowledge/`. No per-file environment variables are
+needed. Document IDs are derived from filenames, while existing stored manifests
+keep their current IDs.
 
 Docker files:
 
@@ -261,22 +264,40 @@ docker compose --profile ingest build
 docker compose up -d postgres bot viewer
 ```
 
-Run ingestion for the configured file:
+Process every PDF currently in `data/knowledge`:
 
 ```bash
 docker compose --profile ingest run --rm ingest
 ```
 
-Or override the source and document ID:
+Add or replace PDFs later and run the same command again. Existing unchanged
+files use the extraction cache; new or changed files are processed
+automatically. The bot loads chunks at startup, so restart it after ingestion:
 
 ```bash
-docker compose --profile ingest run --rm ingest \
-  --source /app/data/knowledge/furniture.pdf \
-  --document-id furniture
+docker compose restart bot
 ```
 
+To preview the derived document IDs without running extraction:
+
+```bash
+docker compose --profile ingest run --rm ingest --dry-run
+```
+
+The single-file helper is still available for local/manual runs:
+
+```bash
+.venv/bin/python scripts/docker_pipeline.py \
+  --source "data/knowledge/travel.pdf" \
+  --document-id travel
+```
+
+The Docker `ingest` service itself always scans the whole knowledge directory.
+
 The ingestion container writes to `./data/processed`; the bot reads that host
-directory read-only. `./data/knowledge` is also mounted read-only.
+directory read-only. `./data/knowledge` is also mounted read-only. On Linux,
+set `HOST_UID` and `HOST_GID` in `.env` to your user ID so generated files keep
+the expected ownership.
 
 If the model endpoint runs on the host, set:
 
