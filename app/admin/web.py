@@ -37,6 +37,8 @@ class CleanAdminSite(AdminSite):
         app.header = None
         app.footer = None
         app.cssVars = {
+            "--Layout-body-bg": "#f6f7fa",
+            "--Page-main-bg": "#f6f7fa",
             "--Layout-aside-bg": "#eef3fb",
             "--Layout-aside-color": "#3f4c63",
             "--Layout-asideLink-color": "#465268",
