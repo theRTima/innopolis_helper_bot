@@ -33,16 +33,19 @@ def create_app() -> FastAPI:
     settings = Settings.from_env()
     areas = load_areas()
     demo = os.getenv("ANALYTICS_DEMO") == "1"
-    show_examples = demo or os.getenv("ANALYTICS_SHOW_EXAMPLES") == "1"
+    examples_setting = os.getenv("ANALYTICS_SHOW_EXAMPLES")
     username = os.getenv("ANALYTICS_USERNAME", "admin")
     password = os.getenv("ANALYTICS_PASSWORD", "")
     security = HTTPBasic(auto_error=False, realm="Iskra Analytics")
     database_location = settings.database_url or settings.database_path
     db = None if demo else Database(database_location)
-    task_enabled = (
+    task_available = (
         db is not None and bool(settings.ticket_provider) and bool(password)
     )
-    show_examples = show_examples or task_enabled
+    show_examples = demo or examples_setting == "1" or (
+        examples_setting is None and task_available
+    )
+    task_enabled = task_available and show_examples
     template = Environment(
         loader=PackageLoader("app.analytics", "templates"),
         autoescape=select_autoescape(["html"]),

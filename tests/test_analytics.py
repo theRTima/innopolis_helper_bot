@@ -328,6 +328,7 @@ async def test_dashboard_requires_login_and_escapes_stored_labels(
     monkeypatch.setenv("ANALYTICS_PASSWORD", "test-secret")
     monkeypatch.setenv("ANALYTICS_USERNAME", "admin")
     monkeypatch.setenv("ANALYTICS_SHOW_EXAMPLES", "0")
+    monkeypatch.setenv("TICKET_PROVIDER", "demo")
     monkeypatch.setenv("ANALYTICS_AREAS_FILE", str(areas_file))
     monkeypatch.setenv("DATABASE_PATH", str(path))
     monkeypatch.setenv("DATABASE_URL", "")
@@ -342,6 +343,7 @@ async def test_dashboard_requires_login_and_escapes_stored_labels(
         assert "После закрытия задач" in result.text
         assert "BO-14" in result.text
         assert "A question with a sensitive detail" not in result.text
+        assert 'class="task-form"' not in result.text
         assert result.headers["Cache-Control"] == "private, no-store"
         assert "Размечено 3 из 3 вопросов" in result.text
 

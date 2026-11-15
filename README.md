@@ -530,7 +530,7 @@ images.
 | `ANALYTICS_USERNAME` | `admin` | HTTP Basic username for the analytics panel |
 | `ANALYTICS_PASSWORD` | — | Password for the internal analytics panel |
 | `ANALYTICS_AREAS_FILE` | — | Optional JSON product-area mapping |
-| `ANALYTICS_SHOW_EXAMPLES` | `0` | Show anonymized examples in analytics |
+| `ANALYTICS_SHOW_EXAMPLES` | Auto | Unset: show anonymized examples when ticket tasks are enabled; `0`: hide examples and disable task confirmation; `1`: show examples |
 | `ANALYTICS_DEMO` | `0` | Use generated demo cards without a database |
 | `ANALYTICS_PORT` | `8002` | Analytics panel host port |
 | `TICKET_PROVIDER` | Empty: disabled | `demo`, `jsm`, `zendesk`, or `usedesk` |
