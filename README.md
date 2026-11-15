@@ -377,10 +377,37 @@ storage/admin-venv/bin/uvicorn app.admin.web:create_app --factory --host 127.0.0
 
 Replace the example passwords; percent-encode special characters in URLs. The
 password for the panel is separate from the database password. Open
-`http://127.0.0.1:8001/admin/` and enter the admin username and password.
-The panel is a local preview using HTTP Basic authentication; configure HTTPS
-and appropriate access control before exposing it beyond the machine. AMIS
-loads interface assets from `unpkg.com` by default.
+`http://127.0.0.1:8001/admin/`; the panel redirects to its English sign-in page.
+Successful sign-in creates an eight-hour, HTTP-only session cookie. Keep the
+panel bound to localhost, or configure HTTPS and suitable access controls before
+exposing it beyond the machine. AMIS loads interface assets from `unpkg.com` by
+default.
+
+### Run the administration panel in Docker
+
+Prepare the read-only `bot_admin_reader` role as shown above. Put the following
+values in the ignored file `storage/admin.env` (create the directory if needed):
+
+```env
+ADMIN_DATABASE_URL=postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=CHOOSE_A_STRONG_PASSWORD
+```
+
+Replace the example passwords and restrict the file to its owner, for example
+with `chmod 600 storage/admin.env`. Docker Compose points this URL at the
+`postgres` service inside its network; the same file also works for the local
+preview. Build and start the optional service:
+
+```bash
+docker compose --profile admin up -d --build admin
+docker compose --profile admin logs -f admin
+docker compose --profile admin stop admin
+```
+
+The address remains `http://127.0.0.1:8001/admin/`; `ADMIN_PORT` can change the
+host port. Stop any local uvicorn process already using this port first. A
+missing or incorrect reader password prevents the panel from accessing data.
 
 ## 5. Optional document viewer
 
