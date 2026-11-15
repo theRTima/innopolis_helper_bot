@@ -20,15 +20,17 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.rag.extraction import docling_parser as dp
 from app.rag.extraction import new_pipeline
 from app.rag.extraction import normalized as norm
+from app.rag.extraction import quality
 from app.rag.extraction import vision_parser as vp
 from app.rag.extraction.assets import verify_assets
 from app.rag.extraction.quality import coverage_report
 from app.rag.ingest import sha256_file
 from app.rag.render import RenderError
 
-PIPELINE_VERSION = 3
+PIPELINE_VERSION = 4
 MAX_TOKENS_TARGET = 600
 SUPPORTED_FORMATS = {"pdf", "docx", "xlsx", "pptx", "image", "text"}
 OFFICE_FORMATS = {"docx", "xlsx", "pptx"}
@@ -75,6 +77,9 @@ def configuration() -> dict:
         "code": {
             "new_pipeline": sha256_file(Path(new_pipeline.__file__)),
             "normalized": sha256_file(Path(norm.__file__)),
+            "quality": sha256_file(Path(quality.__file__)),
+            "vision_parser": sha256_file(Path(vp.__file__)),
+            "docling_parser": sha256_file(Path(dp.__file__)),
         },
     }
 

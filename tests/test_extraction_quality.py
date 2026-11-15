@@ -74,7 +74,7 @@ def analysis():
         ),
     ],
 )
-def test_unsafe_analysis_is_retained_but_not_published(field, value):
+def test_review_metadata_keeps_clear_items_published(field, value):
     data = analysis()
     data[field] = value
     nd = norm.NormalizedDocument()
@@ -88,10 +88,12 @@ def test_unsafe_analysis_is_retained_but_not_published(field, value):
         bbox=None,
         raw_response="original response",
     )
-    assert added == 0
-    assert not nd.sources
+    assert added == 1
+    assert len(nd.sources) == 1
     assert nd.analysis_records[0]["raw_response"] == "original response"
     assert nd.analysis_records[0]["analysis"] == data
+    assert nd.analysis_records[0]["accepted_item_ids"] == ["v1"]
+    assert nd.analysis_records[0]["quality_status"] == "needs_review"
     assert coverage_report(nd, [], nd.warnings)["status"] == "needs_review"
 
 
@@ -121,6 +123,26 @@ def test_uncertain_edge_and_transcription_are_quarantined():
     assert not audit_analysis(data, "", 4, "a1")[0]
 
 
+def test_uncertain_item_does_not_hide_clear_sibling():
+    data = analysis()
+    data["items"].append(
+        {
+            "local_id": "v2",
+            "type": "text",
+            "transcription": [
+                {"text": "unclear", "readability": "uncertain"}
+            ],
+        }
+    )
+    accepted, audit = audit_analysis(data, "raw", 4, "a1")
+    assert [item["local_id"] for item in accepted] == ["v1"]
+    assert audit["accepted_item_ids"] == ["v1"]
+    assert audit["rejected_items"] == [
+        {"local_id": "v2", "issues": ["uncertain_transcription"]}
+    ]
+    assert audit["quality_status"] == "needs_review"
+
+
 def test_failed_picture_triggers_fallback_even_with_heading():
     assert should_fallback(
         failed_visual=True,
@@ -135,6 +157,25 @@ def test_failed_picture_triggers_fallback_even_with_heading():
         body_chars=1000,
         has_visual=True,
         min_page_text=50,
+    )
+
+
+def test_small_picture_with_short_text_triggers_page_fallback():
+    assert should_fallback(
+        failed_visual=False,
+        has_elements=True,
+        body_chars=150,
+        has_visual=True,
+        min_page_text=30,
+        picture_area_ratio=0.01,
+    )
+    assert not should_fallback(
+        failed_visual=False,
+        has_elements=True,
+        body_chars=150,
+        has_visual=True,
+        min_page_text=30,
+        picture_area_ratio=0.8,
     )
 
 

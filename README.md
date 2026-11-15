@@ -403,7 +403,12 @@ each question, so uploads and deletions do not require a restart.
 - Docling extracts text, tables and picture regions.
 - Picture regions and low-text pages are analysed by the multimodal model.
 - Independent vision calls run in parallel; raw responses are cached per request.
-- Only accepted, validated visual items become retrieval sources.
+- Clear visual items are accepted per item; uncertain transcription or diagram
+  directions quarantine only that item. Response-level limitations, conflicts
+  and review proposals remain in the audit metadata.
+- Pages with small picture regions and a weak text layer fall back to full-page
+  vision, and unusually tall pages are split into overlapping tiles so
+  schedule/poster text survives model downscaling.
 - BM25 supplies evidence to the answer model; answers must cite source IDs.
 - Retrieval context expansion is bounded and does not truncate chunks.
 - Diagram nodes/edges and table rows/columns in accepted visual chunks are

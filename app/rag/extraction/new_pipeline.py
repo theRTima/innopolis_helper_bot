@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import shutil
 from collections import defaultdict
 from collections.abc import Callable
@@ -38,6 +39,12 @@ from app.rag.extraction.quality import audit_analysis, should_fallback
 MAX_PROMPT_CHARS = 40_000
 MAX_BATCH_ELEMENTS = 30
 MAX_CANDIDATES = 25
+
+FALLBACK_PICTURE_RATIO = 0.20
+FALLBACK_BODY_CHARS = 400
+PAGE_TILE_ASPECT = 1.8
+PAGE_TILE_TARGET_ASPECT = 1.4
+MAX_PAGE_TILES = 4
 
 logger = logging.getLogger(__name__)
 
@@ -410,6 +417,19 @@ def _analysis_is_empty(analysis) -> bool:
     )
 
 
+def _page_tile_count(width: int, height: int) -> int:
+    """Split unusually tall pages so small text survives model downscaling."""
+    if width <= 0 or height <= 0:
+        return 1
+    aspect = height / width
+    if aspect <= PAGE_TILE_ASPECT:
+        return 1
+    return min(
+        MAX_PAGE_TILES,
+        max(2, math.ceil(aspect / PAGE_TILE_TARGET_ASPECT)),
+    )
+
+
 def build_from_pdf(
     pdf_path: Path,
     *,
@@ -448,6 +468,7 @@ def build_from_pdf(
     pictures: list[dict] = []
     candidates_by_page: dict[int, list[dict]] = defaultdict(list)
     pictures_by_page: dict[int, int] = defaultdict(int)
+    picture_area_by_page: dict[int, float] = defaultdict(float)
     tables_by_page: dict[int, int] = defaultdict(int)
     elements_by_page: dict[int, int] = defaultdict(int)
 
@@ -609,6 +630,8 @@ def build_from_pdf(
                 )
                 mark_processed()
                 continue
+            if target is not None:
+                picture_area_by_page[page_no] += target.get_area()
             asset_id = f"asset-{page_no}-{index}"
             bbox = (
                 [target.x0, target.y0, target.x1, target.y1]
@@ -678,6 +701,13 @@ def build_from_pdf(
 
         fallback_jobs: list[dict] = []
         for page in sorted(selected):
+            pdf_page = pdf_doc.load_page(page - 1)
+            page_area = pdf_page.rect.get_area()
+            picture_area_ratio = (
+                picture_area_by_page.get(page, 0.0) / page_area
+                if pictures_by_page.get(page) and page_area
+                else 1.0
+            )
             if not should_fallback(
                 failed_visual=page in failed_pages,
                 has_elements=bool(elements_by_page.get(page)),
@@ -686,32 +716,72 @@ def build_from_pdf(
                     pictures_by_page.get(page) or tables_by_page.get(page)
                 ),
                 min_page_text=dp.MIN_PAGE_TEXT,
+                picture_area_ratio=picture_area_ratio,
+                low_text_chars=FALLBACK_BODY_CHARS,
             ):
                 mark_processed()
                 continue
-            pdf_page = pdf_doc.load_page(page - 1)
-            image_path = temp_dir / f"page_{page:03d}_vision.png"
-            pdf_page.get_pixmap(dpi=vp.DPI).save(image_path)
-            register_asset(
-                nd.assets, f"asset-{page}-page", image_path, temp_dir, page
-            )
-            fallback_jobs.append(
-                {
-                    "page": page,
-                    "image_path": image_path,
-                    "asset_id": f"asset-{page}-page",
-                    "section_path": page_context.get(page, ("", 0))[0],
-                    "region_id": f"{document_id}:{page}:page",
-                    "page_text": pdf_page.get_text("text").strip()[:4000],
-                    "candidates": candidates_by_page.get(page, [])[
-                        :MAX_CANDIDATES
-                    ],
-                    "fallback_text": vp.clean_content(
-                        pdf_page.get_text("text").strip()
-                    ),
-                }
-            )
+            page_text = pdf_page.get_text("text").strip()
+            fallback_text = vp.clean_content(page_text)
+            candidates = candidates_by_page.get(page, [])[:MAX_CANDIDATES]
+            section_path = page_context.get(page, ("", 0))[0]
+            full_image_path = temp_dir / f"page_{page:03d}_vision.png"
+            pdf_page.get_pixmap(dpi=vp.DPI).save(full_image_path)
 
+            with Image.open(full_image_path) as page_image:
+                width, height = page_image.size
+                tiles = _page_tile_count(width, height)
+
+            if tiles <= 1:
+                image_paths = [(full_image_path, "page", "")]
+            else:
+                image_paths = []
+                step = math.ceil(height / tiles)
+                overlap = max(0, min(64, height // 50))
+                with Image.open(full_image_path) as page_image:
+                    for tile_index in range(tiles):
+                        top = max(
+                            0,
+                            tile_index * step
+                            - (overlap if tile_index else 0),
+                        )
+                        bottom = min(
+                            height,
+                            (tile_index + 1) * step
+                            + (overlap if tile_index < tiles - 1 else 0),
+                        )
+                        tile_path = (
+                            temp_dir
+                            / f"page_{page:03d}_vision_{tile_index + 1}.png"
+                        )
+                        page_image.crop((0, top, width, bottom)).save(
+                            tile_path
+                        )
+                        image_paths.append(
+                            (tile_path, "page", f"-tile-{tile_index + 1}")
+                        )
+                full_image_path.unlink(missing_ok=True)
+
+            for image_path, mode_suffix, id_suffix in image_paths:
+                asset_id = f"asset-{page}-{mode_suffix}{id_suffix}"
+                register_asset(
+                    nd.assets, asset_id, image_path, temp_dir, page
+                )
+                fallback_jobs.append(
+                    {
+                        "page": page,
+                        "image_path": image_path,
+                        "asset_id": asset_id,
+                        "section_path": section_path,
+                        "region_id": f"{document_id}:{page}:{mode_suffix}{id_suffix}",
+                        "page_text": page_text[:4000],
+                        "candidates": candidates,
+                        "fallback_text": fallback_text,
+                    }
+                )
+
+        fallback_pages = {job["page"] for job in fallback_jobs}
+        total_units += max(0, len(fallback_jobs) - len(fallback_pages))
         fallback_tasks = [
             partial(
                 analyze_image,
@@ -728,6 +798,7 @@ def build_from_pdf(
             _vision_workers(),
             on_complete=mark_processed,
         )
+        added_pages: set[int] = set()
         for index, job in enumerate(fallback_jobs):
             if index in errors:
                 raise errors[index]
@@ -741,12 +812,27 @@ def build_from_pdf(
                 asset_id=job["asset_id"],
                 raw_response=raw,
                 bbox=None,
-                fallback_text=job["fallback_text"],
+                fallback_text="",
             )
-            if not added:
-                warnings.append(
-                    f"page {job['page']}: vision fallback produced no items"
+            if added:
+                added_pages.add(job["page"])
+        for page in sorted(fallback_pages):
+            if page in added_pages:
+                continue
+            job = next(job for job in fallback_jobs if job["page"] == page)
+            if job["fallback_text"]:
+                nd.add_text(
+                    text=job["fallback_text"],
+                    page_from=page,
+                    page_to=page,
+                    section_path=job["section_path"],
+                    parent_section_id=None,
+                    source_regions=[{"page": page}],
+                    origin="docling",
                 )
+            warnings.append(
+                f"page {page}: vision fallback produced no items"
+            )
     finally:
         pdf_doc.close()
 

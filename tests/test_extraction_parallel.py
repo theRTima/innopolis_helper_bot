@@ -66,6 +66,12 @@ def test_tiny_picture_filter_uses_pixel_area(tmp_path, monkeypatch):
     assert not np._picture_too_small(large)
 
 
+def test_tall_pages_are_split_for_vision():
+    assert np._page_tile_count(1653, 2248) == 1
+    assert np._page_tile_count(1653, 4220) == 2
+    assert np._page_tile_count(1000, 6000) == 4
+
+
 def test_vision_cache_key_is_stable_and_input_sensitive():
     first = vp._cache_key("vision", "prompt", b"image")
     assert first == vp._cache_key("vision", "prompt", b"image")
