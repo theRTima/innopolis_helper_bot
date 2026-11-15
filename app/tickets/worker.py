@@ -221,9 +221,10 @@ async def run(*, watch_seconds: float = 0) -> int:
     load_dotenv()
     provider = get_provider_from_env()
     if provider is None:
-        raise ValueError(
-            "Set TICKET_PROVIDER to demo, jsm, zendesk or usedesk"
+        logger.warning(
+            "TICKET_PROVIDER is not set; ticket worker is idle"
         )
+        await asyncio.Event().wait()
     database = Database(
         os.getenv("DATABASE_URL", "").strip()
         or os.getenv("DATABASE_PATH", "data/bot.sqlite3")

@@ -18,7 +18,7 @@ OpenAI-compatible answer model.
 | `ingest` | One-shot PDF processing; not a long-running service | — |
 | `admin` | Admin panel: read-only views, allowlist/invites, document uploads | `http://127.0.0.1:8001/admin/` |
 | `document-worker` | Background processing for admin document uploads | — |
-| `ticket-worker` | Optional durable ticket delivery worker (`tickets` profile) | — |
+| `ticket-worker` | Durable ticket delivery worker; starts by default and idles without `TICKET_PROVIDER` | — |
 | `analytics` | Optional support analytics panel (`analytics` profile) | `http://127.0.0.1:8002/` |
 | `analytics-labeler` | Optional background question labeler (`analytics` profile) | — |
 | `llama` | Optional local llama.cpp server | `http://127.0.0.1:8080` |
@@ -60,6 +60,11 @@ use a publicly reachable HTTPS viewer URL, normally through a reverse proxy.
 
 `TELEGRAM_ALLOWED_USERNAMES` is required for access. An empty list denies
 everyone. Use Telegram usernames, not display names.
+
+For ticket creation, also set `TICKET_PROVIDER=demo`, `jsm`, `zendesk` or
+`usedesk` and the provider credentials described under
+[Tickets and analytics](#tickets-and-analytics). The ticket worker starts with
+the default stack; without a provider it stays idle instead of failing.
 
 **3. Add the source PDFs.**
 
@@ -123,20 +128,20 @@ start.
 docker compose up -d
 ```
 
-This starts PostgreSQL, bot, viewer, Grafana, admin and `document-worker`.
+This starts PostgreSQL, bot, viewer, Grafana, admin, `document-worker` and
+`ticket-worker`.
 
-**10. Optional: enable tickets and analytics.**
+**10. Optional: enable analytics.**
 
-Set `ANALYTICS_PASSWORD` in `.env` to enable the analytics panel, and set
-`TICKET_PROVIDER=demo` (or a real provider) to enable tickets. Then start the
-optional workers:
+Set `ANALYTICS_PASSWORD` in `.env` to enable the analytics panel, then start
+the optional analytics services:
 
 ```bash
-docker compose --profile tickets up -d ticket-worker
 docker compose --profile analytics up -d analytics analytics-labeler
 ```
 
-Use `demo` for an offline trial. Real provider settings are described in
+The ticket worker already starts with the stack. Use `demo` for an offline
+ticket trial. Real provider settings are described in
 [Tickets and analytics](#tickets-and-analytics) and `docs/analytics.md`.
 
 **11. Verify the launch.**
@@ -248,7 +253,7 @@ docker compose stop
 docker compose start
 ```
 
-If ticket or analytics profiles are running, include them explicitly:
+If analytics profile services are running, include them explicitly:
 
 ```bash
 docker compose --profile "*" stop
@@ -284,9 +289,9 @@ docker compose restart bot
 docker compose restart viewer
 docker compose restart admin
 docker compose restart document-worker
+docker compose restart ticket-worker
 docker compose restart grafana
 docker compose restart postgres
-docker compose --profile tickets restart ticket-worker
 docker compose --profile analytics restart analytics analytics-labeler
 ```
 
@@ -300,7 +305,7 @@ variables, recreate the affected container:
 docker compose up -d --force-recreate bot
 docker compose up -d --force-recreate admin
 docker compose up -d --force-recreate grafana
-docker compose --profile tickets up -d --force-recreate ticket-worker
+docker compose up -d --force-recreate ticket-worker
 docker compose --profile analytics up -d --force-recreate analytics analytics-labeler
 ```
 
@@ -311,13 +316,15 @@ docker compose stop bot
 docker compose start bot
 docker compose stop admin
 docker compose start admin
-docker compose --profile tickets stop ticket-worker
+docker compose stop ticket-worker
+docker compose start ticket-worker
 docker compose --profile analytics stop analytics analytics-labeler
 ```
 
 `ingest` is a one-shot job, not a daemon. Run it with
 `docker compose --profile ingest run --rm ingest` whenever documents change.
-`ticket-worker` and the analytics services are optional long-running profiles.
+`ticket-worker` starts with the default stack; the analytics services use the
+optional `analytics` profile.
 
 Useful diagnostics:
 
@@ -328,7 +335,7 @@ docker compose logs -f admin
 docker compose logs -f document-worker
 docker compose logs -f grafana
 docker compose logs -f postgres
-docker compose --profile tickets logs -f ticket-worker
+docker compose logs -f ticket-worker
 docker compose --profile analytics logs -f analytics analytics-labeler
 ```
 
@@ -361,7 +368,8 @@ unknown outcome.
 
 ### Tickets and analytics
 
-Ticket creation and support analytics are optional profiles.
+Ticket creation runs with the default stack; support analytics is an optional
+profile. If `TICKET_PROVIDER` is empty, `ticket-worker` stays idle.
 
 Apply migrations first when upgrading an existing installation:
 
@@ -376,8 +384,8 @@ TICKET_PROVIDER=demo
 ```
 
 ```bash
-docker compose --profile tickets up -d ticket-worker
-docker compose --profile tickets logs -f ticket-worker
+docker compose up -d ticket-worker
+docker compose logs -f ticket-worker
 ```
 
 Users can request support with `/operator`, by writing “оператор”, or from the
@@ -860,8 +868,8 @@ Do not delete the staged file while the job is active.
 
 ### Network is still in use
 
-Optional ticket and analytics containers keep the Compose network attached.
-Stop and remove all profiles together:
+Optional analytics containers keep the Compose network attached. Stop and
+remove all profiles together:
 
 ```bash
 docker compose --profile "*" down

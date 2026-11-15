@@ -95,7 +95,6 @@ services:
 
   ticket-worker:
     <<: *app
-    profiles: ["tickets"]
     restart: unless-stopped
     command: ["python", "-m", "app.tickets.worker", "--watch", "30"]
     depends_on:

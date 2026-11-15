@@ -92,7 +92,7 @@ python scripts/demo_ticket_flow.py
 
 ```bash
 python -m app.tickets.worker --watch 30
-docker compose --profile tickets up -d ticket-worker
+docker compose up -d ticket-worker
 ```
 
 Для реальной системы выберите `TICKET_PROVIDER=jsm`, `zendesk` или `usedesk`,
