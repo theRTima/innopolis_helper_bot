@@ -120,6 +120,11 @@ async def main() -> None:
     connection = await asyncpg.connect(url)
     try:
         async with connection.transaction():
+            # Recreate views so schema changes (for example a widened column
+            # type) do not fail on CREATE OR REPLACE VIEW.
+            await connection.execute(
+                "DROP VIEW IF EXISTS " + ", ".join(VIEWS) + " CASCADE"
+            )
             for name, query in VIEWS.items():
                 await connection.execute(f"CREATE OR REPLACE VIEW {name} AS {query}")
             exists = await connection.fetchval(
