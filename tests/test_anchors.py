@@ -49,6 +49,13 @@ def test_invalid_locator_is_rejected() -> None:
         Locator(LocatorKind.PDF_PAGE, 0)
 
 
+def test_viewer_index_reports_running(tmp_path) -> None:
+    client = TestClient(create_app(tmp_path, "test-secret"))
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "Document viewer is running" in response.text
+
+
 def test_viewer_serves_only_signed_known_pdf(tmp_path) -> None:
     (tmp_path / "policy.pdf").write_bytes(b"%PDF-test")
     client = TestClient(create_app(tmp_path, "test-secret"))
