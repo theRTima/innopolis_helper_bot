@@ -1,0 +1,16 @@
+apiVersion: 1
+datasources:
+  - name: Bot analytics
+    uid: bot-analytics-db
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: grafana_reader
+    secureJsonData:
+      password: ${GRAFANA_DB_PASSWORD}
+    jsonData:
+      database: bot
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: false
+    isDefault: true

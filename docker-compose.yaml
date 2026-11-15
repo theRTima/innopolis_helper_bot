@@ -52,6 +52,23 @@ services:
       timeout: 5s
       retries: 3
 
+  grafana:
+    image: grafana/grafana:12.2.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GRAFANA_DB_PASSWORD: ${GRAFANA_DB_PASSWORD:?set GRAFANA_DB_PASSWORD in .env}
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana:/etc/grafana/provisioning:ro
+
   # Offline chunk preparation: writes *.chunks.jsonl next to the PDFs.
   ingest:
     <<: *app
@@ -94,3 +111,4 @@ services:
 
 volumes:
   postgres_data:
+  grafana_data:
