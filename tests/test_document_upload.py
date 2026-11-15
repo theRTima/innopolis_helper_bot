@@ -46,13 +46,20 @@ def test_upload_creates_queued_job_and_stages_file(tmp_path):
         assert "Same%20file%20already%20exists" in duplicate.headers["location"]
         async with sessions() as session:
             jobs = list((await session.scalars(select(DocumentImportJob))).all())
-            assert len(jobs) == 1
-            job = jobs[0]
+            assert len(jobs) == 2
+            job = next(item for item in jobs if item.status == "queued")
+            duplicate_job = next(
+                item for item in jobs if item.progress_stage == "file already exists"
+            )
             assert job.title == "Furniture registry"
             assert job.original_name == "registry.pdf"
             assert job.status == "queued"
             assert job.checksum_sha256
             assert job.progress_percent == 0
+            assert duplicate_job.status == "completed"
+            assert duplicate_job.progress_percent == 100
+            assert duplicate_job.checksum_sha256 == job.checksum_sha256
+            assert duplicate_job.storage_path == ""
             staged = inbox / job.document_id / "registry.pdf"
             assert staged.read_bytes() == b"%PDF-1.7 test"
             assert len([p for p in inbox.iterdir() if p.is_dir()]) == 1

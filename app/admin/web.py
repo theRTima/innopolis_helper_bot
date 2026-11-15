@@ -39,8 +39,17 @@ class CleanAdminSite(AdminSite):
         app.css = """
             .cxd-Layout-body,
             .cxd-Layout-content,
-            .cxd-Page {
-                background: #ffffff !important;
+            .cxd-Page,
+            .cxd-Page-main {
+                background: #172033 !important;
+            }
+            .cxd-Page-header,
+            .cxd-Page-title {
+                color: #f8fafc !important;
+                border-color: #334155 !important;
+            }
+            .cxd-Page-body {
+                color: #e2e8f0;
             }
             .cxd-Layout-aside,
             .cxd-Layout-brandBar {
@@ -63,8 +72,9 @@ class CleanAdminSite(AdminSite):
             }
         """
         app.cssVars = {
-            "--Layout-body-bg": "#ffffff",
-            "--Page-main-bg": "#ffffff",
+            "--Layout-body-bg": "#172033",
+            "--Page-main-bg": "#172033",
+            "--Page-title-color": "#f8fafc",
             "--Layout-aside-bg": "#172033",
             "--Layout-aside-color": "#f8fafc",
             "--Layout-asideLink-color": "#e2e8f0",

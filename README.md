@@ -211,8 +211,8 @@ The worker processes **one document at a time**. Large files can take a long
 time, and later uploads remain `queued` until the current job finishes. This is
 normal.
 
-The queue rejects a file whose SHA-256 checksum matches an existing document
-version or a queued, processing or completed upload. The form reports:
+If a file matches an existing checksum, it is not processed. The queue records
+a completed entry whose stage is `file already exists`, and the form reports:
 
 ```text
 Same file already exists.

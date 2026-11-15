@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import html
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote
 
@@ -147,6 +147,20 @@ def register_document_routes(
                             original_name=original_name[:500],
                             storage_path=str(staged_path),
                             checksum_sha256=checksum,
+                        )
+                    )
+                else:
+                    session.add(
+                        DocumentImportJob(
+                            document_id=document_id,
+                            title=title,
+                            original_name=original_name[:500],
+                            storage_path="",
+                            checksum_sha256=checksum,
+                            status="completed",
+                            progress_percent=100,
+                            progress_stage="file already exists",
+                            finished_at=datetime.now(timezone.utc),
                         )
                     )
             if duplicate:
