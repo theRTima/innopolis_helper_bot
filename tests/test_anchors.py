@@ -69,6 +69,30 @@ def test_viewer_serves_only_signed_known_pdf(tmp_path) -> None:
     assert file_response.headers["cache-control"] == "private, no-store"
 
 
+def test_viewer_serves_uploaded_pdf_from_versioned_store(tmp_path) -> None:
+    document_id = "upload-abc123"
+    version = tmp_path / "processed" / document_id / "sha256-test"
+    version.mkdir(parents=True)
+    (version / "original.pdf").write_bytes(b"%PDF-uploaded")
+    (version / "manifest.json").write_text(
+        '{"document_id":"upload-abc123","original_path":"original.pdf",'
+        '"created_at":"2026-11-15T10:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    client = TestClient(
+        create_app(tmp_path / "knowledge", "test-secret", tmp_path / "processed")
+    )
+    expires = 4_000_000_000
+    signature = sign_document_id(document_id, "test-secret", expires)
+
+    response = client.get(
+        f"/documents/{document_id}/file?expires={expires}&signature={signature}"
+    )
+
+    assert response.status_code == 200
+    assert response.content == b"%PDF-uploaded"
+
+
 def test_viewer_rejects_invalid_signature_and_path_traversal(tmp_path) -> None:
     client = TestClient(create_app(tmp_path, "test-secret"))
 

@@ -42,11 +42,10 @@ async def run() -> int:
         chunks = load_flat_chunks(settings.knowledge_dir)
         source_mode = "flat"
     if not chunks:
-        logger.error(
-            "Чанки не найдены. Выполните: "
-            "app.rag.ingest -> app.rag.render -> app.rag.extract --all."
+        logger.warning(
+            "Чанки пока не найдены. Бот запустится без ответов по базе и "
+            "подхватит документы после загрузки и обработки."
         )
-        return 1
 
     pdf_sources = {path.stem for path in settings.knowledge_dir.glob("*.pdf")}
     chunk_sources = {chunk.document for chunk in chunks}
@@ -58,10 +57,15 @@ async def run() -> int:
             ", ".join(missing),
         )
     logger.info("Загружено %d фрагментов (%s)", len(chunks), source_mode)
-    index = SearchIndex(chunks)
+    index = SearchIndex(
+        chunks,
+        documents_root=settings.documents_dir,
+        static_chunks=chunks if source_mode == "flat" else None,
+    )
 
     database = Database(settings.database_url or settings.database_path)
     await database.init()
+    await database.seed_allowed_usernames(settings.telegram_allowed_usernames)
 
     llm = LLMClient(
         base_url=settings.llm_base_url,
@@ -83,7 +87,7 @@ async def run() -> int:
     )
     dispatcher = Dispatcher()
     whitelist = UsernameWhitelistMiddleware(
-        settings.telegram_allowed_usernames
+        invite_notify_chat_id=settings.access_invite_notify_chat_id
     )
     dispatcher.message.outer_middleware(whitelist)
     dispatcher.callback_query.outer_middleware(whitelist)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.rag.index import load_versioned_chunks
+from app.rag.index import SearchIndex, load_versioned_chunks
 
 
 def _write_json(path: Path, value: dict) -> None:
@@ -108,3 +108,19 @@ def test_versioned_loader_uses_latest_ready_version(tmp_path):
     assert chunks[0].document_id == "doc"
     assert chunks[0].version_id == "sha256-v2"
     assert chunks[0].locator == {"kind": "pdf-page", "value": 3}
+
+
+def test_search_index_refreshes_after_document_import(tmp_path):
+    root = tmp_path / "documents"
+    index = SearchIndex([], documents_root=root)
+    _version(
+        root,
+        "new-document",
+        "sha256-new",
+        "2026-11-15T00:00:00+00:00",
+        [{**_chunk("new-chunk"), "text": "Unique furniture inventory information"}],
+    )
+
+    assert index.refresh() is True
+    assert index.search("furniture inventory")
+    assert index.refresh() is False

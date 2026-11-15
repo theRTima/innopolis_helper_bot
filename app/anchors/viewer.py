@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hmac
+import json
 import os
+import re
 import time
 import zipfile
 from pathlib import Path
@@ -19,8 +21,12 @@ from app.anchors.office import render_office
 def create_app(
     knowledge_dir: Path | None = None,
     secret: str | None = None,
+    documents_dir: Path | None = None,
 ) -> FastAPI:
     root = (knowledge_dir or Path(os.getenv("KNOWLEDGE_DIR", "data/knowledge"))).resolve()
+    processed_root = (
+        documents_dir or Path(os.getenv("DOCUMENTS_DIR", "data/processed/documents"))
+    ).expanduser().resolve()
     signing_secret = secret if secret is not None else os.getenv("DOCUMENT_LINK_SECRET", "")
     app = FastAPI(title="Knowledge document viewer", docs_url=None, redoc_url=None)
 
@@ -30,11 +36,30 @@ def create_app(
         expected = sign_document_id(document_id, signing_secret, expires)
         if not hmac.compare_digest(expected, signature):
             raise HTTPException(status_code=403, detail="Подпись ссылки неверна")
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", document_id):
+            raise HTTPException(status_code=404, detail="Документ не найден")
         candidates = [
             (root / f"{document_id}{suffix}").resolve()
             for suffix in (".pdf", ".docx", ".xlsx", ".pptx")
         ]
         matches = [path for path in candidates if path.parent == root and path.is_file()]
+        if not matches:
+            version_candidates = []
+            document_root = (processed_root / document_id).resolve()
+            if document_root.parent == processed_root and document_root.is_dir():
+                for manifest_path in document_root.glob("sha256-*/manifest.json"):
+                    try:
+                        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        continue
+                    original_name = manifest.get("original_path")
+                    if manifest.get("document_id") != document_id or not isinstance(original_name, str):
+                        continue
+                    original = (manifest_path.parent / original_name).resolve()
+                    if original.parent == manifest_path.parent and original.is_file() and original.suffix.lower() in {".pdf", ".docx", ".xlsx", ".pptx"}:
+                        version_candidates.append((str(manifest.get("created_at", "")), original))
+            if version_candidates:
+                matches = [max(version_candidates, key=lambda item: item[0])[1]]
         if not matches:
             raise HTTPException(status_code=404, detail="Документ не найден")
         if len(matches) > 1:

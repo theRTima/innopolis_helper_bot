@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,7 +14,20 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from app.storage.models import Analitics, Answer, Conversation, EscalationEvent, Feedback, Message, Question, User
+from app.storage.models import (
+    AccessControlState,
+    AccessInvite,
+    AccessInviteUse,
+    AllowedTelegramUser,
+    Analitics,
+    Answer,
+    Conversation,
+    EscalationEvent,
+    Feedback,
+    Message,
+    Question,
+    User,
+)
 
 
 class Database:
@@ -62,6 +76,108 @@ class Database:
         if self._engine.dialect.name == "postgresql":
             return postgres_insert(model).values(**values)
         return sqlite_insert(model).values(**values)
+
+    async def seed_allowed_usernames(self, usernames: frozenset[str]) -> None:
+        """Import the legacy .env allowlist once, then let the database own it."""
+        statement = self._insert(AccessControlState, {"id": 1}).on_conflict_do_nothing(
+            index_elements=[AccessControlState.id]
+        )
+        async with self.session() as session, session.begin():
+            inserted = await session.execute(statement)
+            if inserted.rowcount:
+                session.add_all(
+                    AllowedTelegramUser(username=name, is_active=True)
+                    for name in sorted(usernames)
+                )
+
+    async def is_user_allowed(self, telegram_id: int, username: str | None) -> bool:
+        normalized = (username or "").strip().lstrip("@").lower() or None
+        async with self.session() as session:
+            user = await session.scalar(
+                select(AllowedTelegramUser).where(
+                    AllowedTelegramUser.telegram_id == telegram_id
+                )
+            )
+            if user is not None:
+                return user.is_active
+            if normalized is None:
+                return False
+            user = await session.scalar(
+                select(AllowedTelegramUser).where(
+                    AllowedTelegramUser.username == normalized
+                )
+            )
+            if user is None or not user.is_active:
+                return False
+            if user.telegram_id is not None:
+                return False
+            user.telegram_id = telegram_id
+            await session.commit()
+            return True
+
+    async def accept_access_invite(
+        self, *, token: str, telegram_id: int, username: str | None
+    ) -> bool:
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        normalized = (username or "").strip().lstrip("@").lower() or None
+        async with self.session() as session, session.begin():
+            invite = await session.scalar(
+                select(AccessInvite)
+                .where(AccessInvite.token_hash == token_hash)
+                .with_for_update()
+            )
+            now = datetime.now(timezone.utc)
+            if invite is None or invite.revoked_at is not None:
+                return False
+            expires_at = invite.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= now or invite.use_count >= invite.max_uses:
+                return False
+            previously_used = await session.scalar(
+                select(AccessInviteUse.id).where(
+                    AccessInviteUse.invite_id == invite.id,
+                    AccessInviteUse.telegram_id == telegram_id,
+                )
+            )
+            if previously_used is not None:
+                return False
+
+            user = await session.scalar(
+                select(AllowedTelegramUser).where(
+                    AllowedTelegramUser.telegram_id == telegram_id
+                )
+            )
+            if user is None and normalized:
+                user = await session.scalar(
+                    select(AllowedTelegramUser).where(
+                        AllowedTelegramUser.username == normalized
+                    )
+                )
+                if user is not None and user.telegram_id not in (None, telegram_id):
+                    user = None
+                    normalized = None
+            if user is None:
+                user = AllowedTelegramUser(
+                    username=normalized,
+                    telegram_id=telegram_id,
+                    is_active=True,
+                )
+                session.add(user)
+            else:
+                user.is_active = True
+                if user.telegram_id is None:
+                    user.telegram_id = telegram_id
+
+            session.add(
+                AccessInviteUse(
+                    invite_id=invite.id,
+                    telegram_id=telegram_id,
+                    username=normalized,
+                )
+            )
+            invite.use_count += 1
+        return True
 
     async def save_question(
         self,

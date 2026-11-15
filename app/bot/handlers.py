@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
@@ -162,6 +163,7 @@ async def handle_question(
         logger.warning("Unable to send typing indicator", exc_info=True)
     search_error = False
     try:
+        await asyncio.to_thread(index.refresh)
         results = retrieve_context(
             index, question, top_k=settings.top_k, min_score=settings.min_score,
         )
@@ -206,7 +208,8 @@ async def handle_question(
         for position, (_, chunk) in enumerate(results, start=1):
             if position not in cited:
                 continue
-            key = (chunk.document, chunk.page_from)
+            document_id = chunk.document_id or chunk.document
+            key = (document_id, chunk.page_from)
             if key in seen:
                 continue
             seen.add(key)
@@ -215,7 +218,7 @@ async def handle_question(
                     f"Открыть источник [{position}] · стр. {chunk.page_label}",
                     build_anchor_url(
                         settings.documents_base_url,
-                        chunk.document,
+                        document_id,
                         Locator(LocatorKind.PDF_PAGE, chunk.page_from),
                         secret=settings.document_link_secret,
                     ),

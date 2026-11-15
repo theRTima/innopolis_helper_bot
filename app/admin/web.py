@@ -6,18 +6,24 @@ from html import escape
 import hmac
 import os
 import time
+from pathlib import Path
 from urllib.parse import parse_qs, urlencode
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi_amis_admin.admin.admin import AdminAction
 from fastapi_amis_admin.admin.extensions.admin import ReadOnlyModelAdmin
 from fastapi_amis_admin.admin.settings import Settings
 from fastapi_amis_admin.admin.site import AdminSite, FileAdmin
+from fastapi_amis_admin.amis.components import ActionType
 from fastapi_amis_admin.utils.translation import i18n
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.storage.models import Document, Question, User
+from app.admin.access import register_access_admins, register_access_routes
+from app.admin.documents import register_document_routes
+from app.storage.models import Document, DocumentImportJob, Question, User
 
 
 def create_app() -> FastAPI:
@@ -25,8 +31,13 @@ def create_app() -> FastAPI:
     database_url = os.environ.get("ADMIN_DATABASE_URL", "").strip()
     username = os.environ.get("ADMIN_USERNAME", "").strip()
     password = os.environ.get("ADMIN_PASSWORD", "")
-    if not database_url or not username or not password:
-        raise RuntimeError("Set ADMIN_DATABASE_URL, ADMIN_USERNAME and ADMIN_PASSWORD")
+    access_database_url = os.environ.get("ADMIN_ACCESS_DATABASE_URL", "").strip()
+    bot_username = os.environ.get("TELEGRAM_BOT_USERNAME", "").strip().lstrip("@")
+    if not database_url or not access_database_url or not username or not password:
+        raise RuntimeError(
+            "Set ADMIN_DATABASE_URL, ADMIN_ACCESS_DATABASE_URL, "
+            "ADMIN_USERNAME and ADMIN_PASSWORD"
+        )
     database_host = os.environ.get("ADMIN_DATABASE_HOST", "").strip()
     if database_host:
         url = make_url(database_url)
@@ -34,9 +45,26 @@ def create_app() -> FastAPI:
             raise RuntimeError("ADMIN_DATABASE_HOST requires a PostgreSQL URL")
         port = int(os.environ.get("ADMIN_DATABASE_PORT", "5432"))
         database_url = url.set(host=database_host, port=port).render_as_string(hide_password=False)
+        access_url = make_url(access_database_url)
+        if access_url.get_backend_name() != "postgresql":
+            raise RuntimeError("ADMIN_DATABASE_HOST requires a PostgreSQL URL")
+        access_database_url = access_url.set(host=database_host, port=port).render_as_string(
+            hide_password=False
+        )
 
     app = FastAPI(title="Bot administration", docs_url=None, redoc_url=None, openapi_url=None)
     i18n.set_language("en_US")
+    access_engine = create_async_engine(access_database_url, pool_pre_ping=True)
+    access_sessions = async_sessionmaker(access_engine, expire_on_commit=False)
+    register_access_routes(
+        app,
+        sessions=access_sessions,
+        admin_username=username,
+        bot_username=bot_username,
+    )
+    inbox = Path(os.environ.get("DOCUMENT_INBOX_DIR", "data/inbox"))
+    register_document_routes(app, sessions=access_sessions, inbox=inbox)
+    app.add_event_handler("shutdown", access_engine.dispose)
 
     session_cookie = "bot_admin_session"
     session_ttl = 8 * 60 * 60
@@ -147,10 +175,30 @@ button:hover{background:#244ce0}.foot{margin-top:21px;color:var(--muted);font-si
         list_display = [Document.id, Document.slug, Document.title, Document.format, Document.active_version]
 
     @site.register_admin
+    class DocumentImportAdmin(ReadOnlyModelAdmin):
+        page_schema = "Document upload queue"
+        model = DocumentImportJob
+        list_display = [DocumentImportJob.id, DocumentImportJob.title, DocumentImportJob.original_name, DocumentImportJob.status, DocumentImportJob.created_at, DocumentImportJob.error]
+        admin_action_maker = [
+            lambda admin: AdminAction(
+                admin,
+                name="upload_document",
+                action=ActionType.Url(
+                    label="Upload document",
+                    url="/documents/upload",
+                    blank=True,
+                ),
+                flags=["toolbar"],
+            )
+        ]
+
+    @site.register_admin
     class UserAdmin(ReadOnlyModelAdmin):
         page_schema = "Users"
         model = User
         list_display = [User.id, User.telegram_id, User.created_at]
+
+    register_access_admins(site, access_engine)
 
     site.mount_app(app)
     return app

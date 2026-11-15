@@ -23,7 +23,7 @@ async def main() -> None:
             await connection.execute("ALTER ROLE bot_admin_reader SET default_transaction_read_only = on")
             await connection.execute("REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM bot_admin_reader")
             await connection.execute("GRANT USAGE ON SCHEMA public TO bot_admin_reader")
-            await connection.execute("GRANT SELECT ON questions, documents, users TO bot_admin_reader")
+            await connection.execute("GRANT SELECT ON questions, documents, users, document_import_jobs TO bot_admin_reader")
         print("Read-only admin role ready")
     finally:
         await connection.close()

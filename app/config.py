@@ -58,6 +58,7 @@ class Settings:
     answer_max_completion_tokens: int = 1400
     support_url: str = ""
     telegram_allowed_usernames: frozenset[str] = frozenset()
+    access_invite_notify_chat_id: int | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -68,6 +69,10 @@ class Settings:
         budget = int(budget_text) if budget_text else None
         if budget is not None and not 1 <= budget <= 4096:
             raise ValueError("LLM_THINKING_BUDGET must be from 1 to 4096")
+        notification_chat = os.getenv("ACCESS_INVITE_NOTIFY_CHAT_ID", "").strip()
+        notification_chat_id = int(notification_chat) if notification_chat else None
+        if notification_chat_id is not None and notification_chat_id == 0:
+            raise ValueError("ACCESS_INVITE_NOTIFY_CHAT_ID must be a non-zero Telegram chat ID")
         return cls(
             bot_token=os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
             llm_base_url=os.getenv("LLM_BASE_URL", "http://127.0.0.1:8080/v1"),
@@ -106,6 +111,7 @@ class Settings:
             telegram_allowed_usernames=_allowed_usernames(
                 os.getenv("TELEGRAM_ALLOWED_USERNAMES", "")
             ),
+            access_invite_notify_chat_id=notification_chat_id,
         )
 
     def validate(self) -> None:

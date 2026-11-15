@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
 
 class Base(DeclarativeBase):
@@ -46,6 +47,80 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
+
+
+class AllowedTelegramUser(Base):
+    """Telegram usernames explicitly allowed to use the bot."""
+
+    __tablename__ = "allowed_telegram_users"
+    __table_args__ = (
+        UniqueConstraint("username", name="uq_allowed_telegram_username"),
+        UniqueConstraint("telegram_id", name="uq_allowed_telegram_id"),
+        CheckConstraint(
+            "username IS NOT NULL OR telegram_id IS NOT NULL",
+            name="ck_allowed_telegram_identity",
+        ),
+        CheckConstraint(
+            "telegram_id IS NULL OR telegram_id > 0",
+            name="ck_allowed_telegram_id_positive",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    username: Mapped[str | None] = mapped_column(String(32))
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    is_active: Mapped[bool] = mapped_column(default=True, server_default="true", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
+
+    @validates("username")
+    def normalize_username(self, _key: str, value: str | None) -> str | None:
+        if value is None:
+            return None
+        username = value.strip().lstrip("@").lower()
+        if not username:
+            return None
+        if not re.fullmatch(r"[a-z0-9_]{1,32}", username):
+            raise ValueError("Enter a Telegram username, optionally prefixed with @")
+        return username
+
+
+class AccessControlState(Base):
+    """One-time marker for importing the legacy environment whitelist."""
+
+    __tablename__ = "access_control_state"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    initialized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
+
+
+class AccessInvite(Base):
+    __tablename__ = "access_invites"
+    __table_args__ = (
+        CheckConstraint("max_uses > 0", name="ck_access_invites_max_uses_positive"),
+        CheckConstraint("use_count >= 0 AND use_count <= max_uses", name="ck_access_invites_use_count"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    max_uses: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    use_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
+
+
+class AccessInviteUse(Base):
+    __tablename__ = "access_invite_uses"
+    __table_args__ = (
+        UniqueConstraint("invite_id", "telegram_id", name="uq_access_invite_user"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    invite_id: Mapped[int] = mapped_column(ForeignKey("access_invites.id"), nullable=False, index=True)
+    telegram_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(32))
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
 
 
 class Conversation(Base):
@@ -132,6 +207,29 @@ class ImportRun(Base):
     vision_ms: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     total_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
+
+
+class DocumentImportJob(Base):
+    """Admin upload queue consumed by the isolated ingestion worker."""
+
+    __tablename__ = "document_import_jobs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'processing', 'completed', 'failed')",
+            name="ck_document_import_jobs_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    original_name: Mapped[str] = mapped_column(String(500), nullable=False)
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued", index=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Answer(Base):

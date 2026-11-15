@@ -7,6 +7,7 @@ import hashlib
 import logging
 import math
 import re
+import threading
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -248,11 +249,17 @@ class SearchIndex:
         k1: float = 1.5,
         b: float = 0.75,
         use_search_representation: bool = True,
+        documents_root: Path | None = None,
+        static_chunks: list[Chunk] | None = None,
     ) -> None:
         self.chunks = chunks
         self.k1 = k1
         self.b = b
         self.use_search_representation = use_search_representation
+        self.documents_root = documents_root
+        self.static_chunks = static_chunks or []
+        self._refresh_lock = threading.Lock()
+        self._manifest_signature = self._current_manifest_signature()
         self._stemmer = snowballstemmer.stemmer("russian")
         self._tokens = [
             self._normalize(
@@ -276,6 +283,41 @@ class SearchIndex:
             term: math.log(1 + (total - frequency + 0.5) / (frequency + 0.5))
             for term, frequency in document_frequency.items()
         }
+
+    def _current_manifest_signature(self) -> tuple[tuple[str, int, int], ...]:
+        if self.documents_root is None or not self.documents_root.is_dir():
+            return ()
+        signature = []
+        for path in self.documents_root.glob("*/sha256-*/chunks/*/chunk_manifest.json"):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+        return tuple(sorted(signature))
+
+    def refresh(self) -> bool:
+        """Reload the index after a background worker publishes new chunks."""
+        if self.documents_root is None:
+            return False
+        with self._refresh_lock:
+            signature = self._current_manifest_signature()
+            if signature == self._manifest_signature:
+                return False
+            chunks = self.static_chunks + load_versioned_chunks(self.documents_root)
+            replacement = SearchIndex(
+                chunks,
+                k1=self.k1,
+                b=self.b,
+                use_search_representation=self.use_search_representation,
+                documents_root=self.documents_root,
+                static_chunks=self.static_chunks,
+            )
+            replacement._manifest_signature = signature
+            replacement._refresh_lock = self._refresh_lock
+            self.__dict__ = replacement.__dict__
+            logger.info("Refreshed RAG index: %d chunks", len(self.chunks))
+            return True
 
     def _normalize(self, text: str) -> list[str]:
         return [self._stemmer.stemWord(term) for term in tokenize(text)]

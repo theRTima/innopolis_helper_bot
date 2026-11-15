@@ -56,6 +56,7 @@ services:
       - "127.0.0.1:${VIEWER_PORT:-8090}:8090"
     volumes:
       - ./data/knowledge:/app/data/knowledge:ro
+      - ./data/processed:/app/data/processed:ro
     healthcheck:
       test:
         - "CMD"
@@ -77,11 +78,17 @@ services:
     environment:
       ADMIN_DATABASE_HOST: postgres
       ADMIN_DATABASE_PORT: "5432"
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+      DOCUMENT_INBOX_DIR: /app/data/inbox
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-8001}:8001"
+    volumes:
+      - ./data/inbox:/app/data/inbox
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:${ADMIN_PORT:-8001}:8001"
+      document-worker:
+        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8001), 2).close()"]
       interval: 15s
@@ -124,6 +131,30 @@ services:
       - "/app/data/processed/documents"
     volumes:
       - ./data/knowledge:/app/data/knowledge:ro
+      - ./data/processed:/app/data/processed
+
+  # Persistent worker used by the admin upload page. It shares the inbox and
+  # versioned store with the admin and bot, but keeps parsing off web requests.
+  document-worker:
+    <<: *app
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    image: innopolis-helper-bot-ingest:local
+    profiles: ["admin"]
+    restart: unless-stopped
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    entrypoint: ["python", "scripts/document_worker.py"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://bot:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/bot
+      DOCUMENTS_DIR: /app/data/processed/documents
+      DOCUMENT_INBOX_DIR: /app/data/inbox
+      KNOWLEDGE_DIR: /app/data/knowledge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data/inbox:/app/data/inbox
       - ./data/processed:/app/data/processed
 
   # Optional containerised llama.cpp server. Put GGUF files into ./.models and

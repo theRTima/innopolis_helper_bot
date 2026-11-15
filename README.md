@@ -114,19 +114,12 @@ docker compose down
 
 ## Telegram access
 
-Set `TELEGRAM_ALLOWED_USERNAMES=@alice,bob` in `.env`. Entries are
-comma-separated; `@` is optional and matching ignores case. A repeated `@`
-(such as `@@alice`) is tolerated. Use Telegram usernames, not display names. An
-empty list denies everyone, and users without a username cannot access the bot.
-Messages, commands, and feedback callbacks are checked before bot handlers run.
-Access follows the current username; update the list when a user changes it.
-
-Restart local runs after editing `.env`. Docker environment changes require
-recreating the bot container:
-
-```bash
-docker compose up -d --force-recreate bot
-```
+`TELEGRAM_ALLOWED_USERNAMES` in `.env` bootstraps the allowlist once on the
+first bot startup after the allowlist migration. Entries are comma-separated;
+`@` is optional and matching ignores case. After bootstrap, manage access in the admin panel's
+**Allowed Telegram users** tab; changes apply without restarting the bot. Use
+Telegram usernames, not display names. Users without a username cannot access
+the bot unless an invite link binds their Telegram ID directly.
 
 ## Local Python setup
 
@@ -188,7 +181,9 @@ images.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token |
-| `TELEGRAM_ALLOWED_USERNAMES` | Empty: deny everyone | Comma-separated username whitelist |
+| `TELEGRAM_BOT_USERNAME` | — | Bot username without `@`, needed to create invite links |
+| `ACCESS_INVITE_NOTIFY_CHAT_ID` | — | Optional Telegram chat/user ID to notify when an invite is activated |
+| `TELEGRAM_ALLOWED_USERNAMES` | Empty: deny everyone | Initial comma-separated allowlist, imported once into the database |
 | `SUPPORT_URL` | Empty | Support button destination |
 | `LLM_BASE_URL` | local fallback | OpenAI-compatible base URL, usually ending in `/v1` |
 | `LLM_MODEL` | `qwen3.8-flash` | Provider model ID |
@@ -296,14 +291,31 @@ Start the viewer:
 .venv/bin/python -m uvicorn app.anchors.viewer:app --host 127.0.0.1 --port 8090
 ```
 
-The viewer serves signed source links for PDF and Office documents. The viewer reads originals from `KNOWLEDGE_DIR`. Remote users need a reachable
-HTTPS URL, usually through a reverse proxy.
+The viewer serves signed source links for PDF and Office documents. It reads
+legacy files from `KNOWLEDGE_DIR` and admin-uploaded files from the versioned
+store under `DOCUMENTS_DIR`. Remote users need a reachable HTTPS URL, usually
+through a reverse proxy.
 
 ## Local administration preview
 
 The optional FastAPI-Amis-Admin application displays questions, documents and
-Telegram users. It has read-only model actions and a separate database role;
-the `users` table contains Telegram IDs and creation dates, not names.
+observed Telegram users, and manages the bot allowlist. The `users` table is
+activity data; **Allowed Telegram users** is the access list. That tab supports
+manual add/edit/delete and importing `.xlsx` or `.csv` files. Its toolbar opens
+the invite-link manager. Set `TELEGRAM_BOT_USERNAME` in `.env` to enable link
+creation. When a user opens a valid Telegram deep link, the bot records the
+activation and adds the Telegram account to the allowlist. **Invite activations**
+shows those records. Optionally set `ACCESS_INVITE_NOTIFY_CHAT_ID` to receive a
+Telegram notification for each activation. Links have an expiry and use limit
+and can be revoked.
+
+The ordinary views use a read-only role. Allowlist and invitation management
+uses a separate role limited to the access, invitation and upload-queue tables.
+The **Document upload queue** tab shows processing status; use `/documents/upload`
+to submit PDF, DOCX, XLSX or PPTX files. A separate worker runs the existing
+versioned ingest, render and extract pipeline. Successful imports appear in
+**Documents**, become searchable without restarting the bot, and their source
+links resolve to the stored original. Failed imports retain an error in the queue.
 
 Install it in a separate environment: this admin version requires a different
 FastAPI version from the one the bot image may install.
@@ -313,15 +325,23 @@ python3 -m venv storage/admin-venv
 storage/admin-venv/bin/pip install -r requirements/admin.txt
 ```
 
-Create the read-only PostgreSQL role using the bot database owner's URL and a
-new password, then configure the panel with the reader role's URL:
+Apply the new upload-queue migration, then create the read-only role for panel
+views and a scoped role for allowlist, invitation and document-upload management:
 
 ```bash
+DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' \
+  .venv/bin/alembic upgrade head
+
 DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' \
 ADMIN_READER_PASSWORD='READER_PASSWORD' \
   storage/admin-venv/bin/python scripts/setup_admin_reader.py
 
+DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' \
+ADMIN_ACCESS_DATABASE_URL='postgresql+asyncpg://bot_admin_access:ACCESS_PASSWORD@127.0.0.1:5438/bot' \
+  storage/admin-venv/bin/python scripts/setup_admin_access.py
+
 export ADMIN_DATABASE_URL='postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot'
+export ADMIN_ACCESS_DATABASE_URL='postgresql+asyncpg://bot_admin_access:ACCESS_PASSWORD@127.0.0.1:5438/bot'
 export ADMIN_USERNAME='admin'
 export ADMIN_PASSWORD='CHOOSE_A_STRONG_PASSWORD'
 storage/admin-venv/bin/uvicorn app.admin.web:create_app --factory --host 127.0.0.1 --port 8001
@@ -330,6 +350,7 @@ storage/admin-venv/bin/uvicorn app.admin.web:create_app --factory --host 127.0.0
 Replace the example passwords; percent-encode special characters in URLs. The
 password for the panel is separate from the database password. Open
 `http://127.0.0.1:8001/admin/`; the panel redirects to its English sign-in page.
+For local upload processing, run `DATABASE_URL='postgresql+asyncpg://bot:OWNER_PASSWORD@127.0.0.1:5438/bot' .venv/bin/python scripts/document_worker.py` in a second terminal with the ingestion dependencies installed.
 Successful sign-in creates an eight-hour, HTTP-only session cookie. Keep the
 panel bound to localhost, or configure HTTPS and suitable access controls before
 exposing it beyond the machine. AMIS loads interface assets from `unpkg.com` by
@@ -337,11 +358,12 @@ default.
 
 ### Run the administration panel in Docker
 
-Prepare the read-only `bot_admin_reader` role as shown above. Put the following
-values in the ignored file `storage/admin.env` (create the directory if needed):
+Prepare both database roles as shown above. Put the following values in the
+ignored file `storage/admin.env` (create the directory if needed):
 
 ```env
 ADMIN_DATABASE_URL=postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot
+ADMIN_ACCESS_DATABASE_URL=postgresql+asyncpg://bot_admin_access:ACCESS_PASSWORD@127.0.0.1:5438/bot
 ADMIN_USERNAME=admin
 ADMIN_PASSWORD=CHOOSE_A_STRONG_PASSWORD
 ```
@@ -454,7 +476,8 @@ the rendered PDF.
 
 ### Access denied
 
-Check the sender's current username against `TELEGRAM_ALLOWED_USERNAMES`.
-Restart locally or recreate the Docker bot container after configuration changes.
+Check that the sender has a Telegram username and an active entry in the admin
+panel's **Allowed Telegram users** tab. `TELEGRAM_ALLOWED_USERNAMES` is only used
+for the one-time database bootstrap.
 
 Keep `.env`, internal documents, and generated artifacts out of commits.
