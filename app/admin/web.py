@@ -22,10 +22,105 @@ from fastapi_amis_admin.utils.translation import i18n
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 
 from app.admin.access import register_access_admins, register_access_routes
 from app.admin.documents import register_document_routes
 from app.storage.models import Document, DocumentImportJob, Question, User
+
+
+ADMIN_DARK_CSS = """
+html, body {
+    background: #172033 !important;
+}
+.cxd-Layout-body,
+.cxd-Layout-content,
+.cxd-Page,
+.cxd-Page-main,
+.cxd-Page-content,
+.cxd-Page-body {
+    background: #172033 !important;
+    color: #e2e8f0 !important;
+}
+.cxd-Page-header,
+.cxd-Page-title {
+    color: #f8fafc !important;
+    border-color: #334155 !important;
+}
+.cxd-Panel,
+.cxd-Panel-body,
+.cxd-Panel-heading,
+.cxd-Crud,
+.cxd-Table-table,
+.cxd-Table-tr,
+.cxd-Table-heading,
+.cxd-Table-footer,
+.cxd-Table-foot {
+    background: #172033 !important;
+    color: #e2e8f0 !important;
+    border-color: #334155 !important;
+}
+.cxd-Table-table th,
+.cxd-Table-table td {
+    color: #e2e8f0 !important;
+    border-color: #334155 !important;
+}
+.cxd-Table-heading,
+.cxd-Table-footer {
+    color: #cbd5e1 !important;
+}
+.cxd-Layout-aside,
+.cxd-Layout-brandBar {
+    background: #172033 !important;
+    color: #f8fafc !important;
+}
+.cxd-Layout-aside a,
+.cxd-Layout-aside .cxd-AsideNav-item,
+.cxd-Layout-aside .cxd-AsideNav-item a,
+.cxd-Layout-brandBar a {
+    color: #e2e8f0 !important;
+}
+.cxd-Layout-aside .cxd-AsideNav-item:hover,
+.cxd-Layout-aside .cxd-AsideNav-item.is-active {
+    background: #26344d !important;
+    color: #ffffff !important;
+}
+.cxd-Layout-aside .cxd-AsideNav-item.is-active a {
+    color: #ffffff !important;
+}
+"""
+
+
+class AdminThemeMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        if not request.url.path.startswith("/admin"):
+            return response
+        if not response.headers.get("content-type", "").startswith("text/html"):
+            return response
+        if hasattr(response, "body"):
+            body = response.body
+        else:
+            body = b"".join([chunk async for chunk in response.body_iterator])
+        text = body.decode(getattr(response, "charset", "utf-8"))
+        if "</head>" not in text:
+            return response
+        text = text.replace(
+            "</head>",
+            f"<style data-admin-dark>{ADMIN_DARK_CSS}</style></head>",
+            1,
+        )
+        headers = {
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() != "content-length"
+        }
+        return Response(
+            content=text,
+            status_code=response.status_code,
+            headers=headers,
+            media_type="text/html",
+        )
 
 
 class CleanAdminSite(AdminSite):
@@ -36,61 +131,6 @@ class CleanAdminSite(AdminSite):
         app.logo = None
         app.header = None
         app.footer = None
-        app.css = """
-            .cxd-Layout-body,
-            .cxd-Layout-content,
-            .cxd-Page,
-            .cxd-Page-main {
-                background: #172033 !important;
-            }
-            .cxd-Page-header,
-            .cxd-Page-title {
-                color: #f8fafc !important;
-                border-color: #334155 !important;
-            }
-            .cxd-Page-body {
-                color: #e2e8f0;
-            }
-            .cxd-Layout-aside,
-            .cxd-Layout-brandBar {
-                background: #172033 !important;
-                color: #f8fafc !important;
-            }
-            .cxd-Layout-aside a,
-            .cxd-Layout-aside .cxd-AsideNav-item,
-            .cxd-Layout-aside .cxd-AsideNav-item a,
-            .cxd-Layout-brandBar a {
-                color: #e2e8f0 !important;
-            }
-            .cxd-Layout-aside .cxd-AsideNav-item:hover,
-            .cxd-Layout-aside .cxd-AsideNav-item.is-active {
-                background: #26344d !important;
-                color: #ffffff !important;
-            }
-            .cxd-Layout-aside .cxd-AsideNav-item.is-active a {
-                color: #ffffff !important;
-            }
-        """
-        app.cssVars = {
-            "--Layout-body-bg": "#172033",
-            "--Page-main-bg": "#172033",
-            "--Page-title-color": "#f8fafc",
-            "--Layout-aside-bg": "#172033",
-            "--Layout-aside-color": "#f8fafc",
-            "--Layout-asideLink-color": "#e2e8f0",
-            "--Layout-asideLink-iconColor": "#cbd5e1",
-            "--Layout-asideLink-onHover-color": "#ffffff",
-            "--Layout-asideLink-onHover-iconColor": "#ffffff",
-            "--Layout-aside-onHover-bg": "#26344d",
-            "--Layout-asideLink-onActive-color": "#ffffff",
-            "--Layout-aside-onAcitve-bg": "#26344d",
-            "--Layout-aside-subList-bg": "#1e293b",
-            "--Layout-asideLabel-color": "#aab7ca",
-            "--Layout-asideDivider-bg": "#334155",
-            "--Layout-brand-bg": "#172033",
-            "--Layout-brand-color": "#f8fafc",
-            "--Layout-brandBar-color": "#f8fafc",
-        }
         return app
 
 
@@ -277,4 +317,5 @@ button:hover{background:#244ce0}.foot{margin-top:21px;color:var(--muted);font-si
 
     site.mount_app(app)
     app.add_middleware(BaseHTTPMiddleware, dispatch=access_db.asgi_dispatch)
+    app.add_middleware(AdminThemeMiddleware)
     return app
