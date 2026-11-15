@@ -75,7 +75,9 @@ async def test_telegram_notice_uses_requester_private_chat(monkeypatch):
     await notifier.failed(job, uncertain=True)
     assert [chat_id for chat_id, _ in notifier.bot.messages] == [123, 123]
     assert "DEMO-1" in notifier.bot.messages[0][1]
+    assert "Текущий статус: new" in notifier.bot.messages[0][1]
     assert result.url not in notifier.bot.messages[0][1]
+    assert "http" not in notifier.bot.messages[0][1]
     assert "повторно" in notifier.bot.messages[1][1]
 
 

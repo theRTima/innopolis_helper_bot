@@ -41,7 +41,10 @@ class TelegramTicketNotifier:
     async def created(self, job: TicketJob, result: TicketResult) -> None:
         if job.kind != "support" or job.telegram_id is None:
             return
-        text = f"Заявка {result.external_id} создана. Статус: {result.status}."
+        text = (
+            f"Заявка {result.external_id} создана. "
+            f"Текущий статус: {result.status}."
+        )
         await self.bot.send_message(chat_id=job.telegram_id, text=text)
 
     async def failed(self, job: TicketJob, *, uncertain: bool) -> None:

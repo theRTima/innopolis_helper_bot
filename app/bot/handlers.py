@@ -68,7 +68,7 @@ def _ticket_message(job) -> str:
     if job.external_id:
         return (
             f"Заявка {job.external_id} создана. "
-            f"Статус: {job.external_status or job.state}."
+            f"Текущий статус: {job.external_status or job.state}."
         )
     if job.state == "uncertain":
         return (
