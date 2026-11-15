@@ -61,7 +61,7 @@
     }
     .period, .note { color: var(--muted); font-size: 13px; }
     .period { margin: 0 0 12px; }
-    .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
     .kpi, .signal, .topics, .empty {
       background: var(--white);
       border: 1px solid var(--line);
@@ -79,6 +79,12 @@
     .trend { color: var(--heat); font-weight: 700; }
     .counts { margin: 0; font-size: 14px; font-weight: 650; }
     .action { margin: 9px 0 0; color: var(--muted); font-size: 14px; }
+    .fact-label { margin: 12px 0 4px; font-size: 13px; font-weight: 700; }
+    .fact-list { margin: 0; padding-left: 19px; font-size: 14px; }
+    .fact-list li { margin: 3px 0; }
+    .task-link { margin-top: 10px; font-size: 13px; }
+    .task-form { margin-top: 10px; }
+    .task-form button { padding: 6px 10px; font-size: 13px; }
     .examples {
       margin: 10px 0 0;
       padding-left: 12px;
@@ -96,7 +102,7 @@
     tbody th { color: var(--ink); font-size: inherit; }
     .number { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
     @media (max-width: 900px) {
-      .kpis { grid-template-columns: repeat(3, 1fr); }
+      .kpis { grid-template-columns: repeat(2, 1fr); }
       .signals { grid-template-columns: repeat(2, 1fr); }
     }
     @media (max-width: 550px) {
@@ -139,35 +145,45 @@
         <span>{{ report.current.users }} разных пользователей</span>
       </div>
       <div class="kpi">
-        <span>Ответы с источником</span><strong>{{ report.current.with_sources }}</strong>
-        <span>Из {{ report.current.total }} вопросов</span>
+        <span>Доля подтверждённо решённых вопросов боту</span>
+        {% if report.current.eligible %}
+        <strong>{{ (100 * report.current.confirmed_resolved / report.current.eligible)|round(1) }}%</strong>
+        <span>{{ report.current.confirmed_resolved }} из {{ report.current.eligible }} обработанных вопросов</span>
+        {% else %}<strong class="missing">Нет исходов</strong>{% endif %}
       </div>
       <div class="kpi">
-        <span>Без подтверждения</span>
-        <strong>{{ report.current.no_evidence + report.current.unverified }}</strong>
-        <span>{{ report.current.errors }} технических ошибок отдельно</span>
+        <span>Исход неизвестен</span><strong>{{ report.current.unknown_resolution }}</strong>
+        <span>{{ report.current.unresolved }} не решены или переданы</span>
       </div>
       <div class="kpi">
-        <span>Ответ помог</span>
-        {% if report.current.rated %}
-        <strong>{{ report.current.helpful }} из {{ report.current.rated }}</strong>
-        <span>Среди оценённых ответов</span>
-        {% else %}<strong class="missing">Нет оценок</strong>{% endif %}
+        <span>Без найденного ответа</span>
+        <strong>{{ report.current.no_evidence }}</strong>
+        <span>{{ report.current.errors }} технических ошибок · {{ report.current.with_sources }} ответов с источниками</span>
       </div>
       <div class="kpi">
-        <span>Передано оператору</span>
+        <span>Запрошен специалист</span>
         {% if report.current.escalations %}
         <strong>{{ report.current.delivered }} из {{ report.current.escalations }}</strong>
-        <span>{{ report.current.failed }} ошибок передачи</span>
+        <span>{{ report.current.failed }} ошибок доставки заявки</span>
         {% else %}<strong class="missing">Нет событий</strong>{% endif %}
       </div>
+      <div class="kpi">
+        <span>Среднее время ответа</span>
+        {% if report.current.response_count %}
+        <strong>{{ (report.current.response_seconds / report.current.response_count)|round(1) }} с</strong>
+        <span>По {{ report.current.response_count }} доставленным ответам</span>
+        {% else %}<strong class="missing">Нет замеров</strong>{% endif %}
+      </div>
     </div>
+    {% if report.current.suppressed or report.current.failed_delivery %}
+    <p class="note">{{ report.current.suppressed }} сообщений ограничены или подавлены, {{ report.current.failed_delivery }} ответов не доставлены. Они не входят в долю подтверждённо решённых вопросов.</p>
+    {% endif %}
     {% if report.current.unknown_status %}
     <p class="note">Для {{ report.current.unknown_status }} вопросов статус ответа отсутствует в истории.</p>
     {% endif %}
 
     <section aria-labelledby="signals">
-      <h2 id="signals">Что проверить</h2>
+      <h2 id="signals">Повторяющиеся проблемы</h2>
       {% if report.signals %}
       <div class="signals">
         {% for signal in report.signals %}
@@ -177,16 +193,48 @@
             {% if signal.rising %} · <span class="trend">Доля растёт</span>{% endif %}
           </p>
           <h3>{{ signal.title }}</h3>
-          <p class="counts">{{ signal.current.total }} в этом периоде · {{ signal.previous }} в прошлом</p>
-          <p class="tags">
-            Пользователи: {{ signal.current.users }}
-            {% if signal.current.escalations %} · Вызовы оператора: {{ signal.current.escalations }}{% endif %}
-          </p>
-          <p class="action">{{ signal.action }}</p>
+          <p class="fact-label">Наблюдения</p>
+          <ul class="fact-list">
+            <li>{{ signal.current.total }} вопросов от {{ signal.current.users }} пользователей; {{ signal.previous }} вопросов в прошлом периоде.</li>
+            <li>
+              {{ signal.current.unresolved }} не решены или переданы специалисту
+              {% if signal.current.eligible %}({{ (100 * signal.current.unresolved / signal.current.eligible)|round|int }}% обработанных){% endif %};
+              {{ signal.current.no_evidence + signal.current.unverified }} без подтверждённых источников.
+            </li>
+            {% if signal.current.escalations %}<li>{{ signal.current.escalations }} запросов специалиста.</li>{% endif %}
+            {% if signal.documents %}<li>Упомянутые источники: {{ signal.documents|join(', ') }}.</li>{% endif %}
+          </ul>
           {% if signal.examples %}
           <blockquote class="examples">
             {% for example in signal.examples %}<p>«{{ example }}»</p>{% endfor %}
           </blockquote>
+          {% endif %}
+          <p class="fact-label">Гипотеза для проверки</p>
+          <p class="action">{{ signal.action }}</p>
+          {% set task = task_links.get(signal.key) %}
+          {% if task %}
+          <p class="task-link">Задача:
+            {% if task.url %}<a href="{{ task.url }}" rel="noopener noreferrer">{{ task.external_id or 'Открыть' }}</a>
+            {% else %}{{ task.external_id or 'Ожидает создания' }}{% endif %}
+            · {{ task.status }}
+          </p>
+          {% if task.closed_at and task.before_total is not none and task.after_total is not none %}
+          <p class="task-link">За равные периоды до/после закрытия: {{ task.before_total }} → {{ task.after_total }} вопросов, {{ task.before_unresolved }} → {{ task.after_unresolved }} нерешённых.</p>
+          {% elif task.closed_at %}
+          <p class="task-link">Для сравнения до и после закрытия ещё не накопились два полных периода.</p>
+          {% endif %}
+          {% else %}
+          <p class="task-link">Кандидат на задачу: изучите примеры и подтвердите создание.</p>
+          {% if task_enabled %}
+          <form class="task-form" method="post" action="/issues/create-ticket">
+            <input type="hidden" name="area" value="{{ signal.area }}">
+            <input type="hidden" name="kind" value="{{ signal.kind }}">
+            <input type="hidden" name="issue" value="{{ signal.title }}">
+            <input type="hidden" name="days" value="{{ days }}">
+            <input type="hidden" name="csrf" value="{{ task_tokens[signal.key] }}">
+            <button type="submit">Подтвердить задачу</button>
+          </form>
+          {% endif %}
           {% endif %}
         </article>
         {% endfor %}
@@ -199,6 +247,28 @@
         В нём размечено {{ report.previous.classified }} из {{ report.previous.total }} вопросов.
         {% if not report.can_compare_trends %}Для оценки роста нужно больше размеченных данных.{% endif %}
       </p>
+    </section>
+
+    <section aria-labelledby="task-results">
+      <h2 id="task-results">После закрытия задач</h2>
+      {% for key, task in task_links.items() if task.closed_at %}
+      <article class="signal">
+        <h3>{{ key[2] }}</h3>
+        <p class="tags">
+          {{ areas.get(key[0], key[0]) }} · {{ kinds.get(key[1], key[1]) }}
+          {% if task.url %} · <a href="{{ task.url }}" rel="noopener noreferrer">{{ task.external_id or 'Открыть задачу' }}</a>{% endif %}
+        </p>
+        {% if task.before_total is not none and task.after_total is not none %}
+        <p class="counts">{{ task.before_total }} → {{ task.after_total }} вопросов</p>
+        <p class="note">{{ task.before_unresolved }} → {{ task.after_unresolved }} нерешённых за два равных периода до и после закрытия.</p>
+        {% else %}
+        <p class="note">Полные периоды для сравнения ещё не накопились или вышли за окно отчёта.</p>
+        {% endif %}
+      </article>
+      {% else %}
+      <p class="empty">Пока нет закрытых задач с привязкой к темам вопросов.</p>
+      {% endfor %}
+      <p class="note">Изменение показателей после закрытия задачи не доказывает причину. Сотрудник проверяет, что ещё менялось в этот период.</p>
     </section>
 
     <section aria-labelledby="topics">

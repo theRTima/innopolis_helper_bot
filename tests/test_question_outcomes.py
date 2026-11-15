@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.bot.input_filter import GibberishMute, RateLimiter, SpamCooldown, valid_question
 from app.bot import input_filter
 from app.storage.db import Database
-from app.storage.models import Analitics
+from app.storage.models import Analitics, EscalationEvent
 from app.bot import handlers
 from app.rag.index import SearchIndex
 from app.rag.index import Chunk
@@ -162,7 +162,13 @@ async def test_four_clarifications_send_specialist_button(tmp_path, monkeypatch)
     async with db.session() as session:
         rows = (await session.scalars(select(Analitics).order_by(Analitics.question_id))).all()
         assert [row.answer_status for row in rows] == ["no_evidence"] * 4
-        assert rows[-1].operator_status == "delivered"
+        assert rows[-1].operator_status is None
+        offered = (await session.scalars(
+            select(EscalationEvent).where(
+                EscalationEvent.question_id == rows[-1].question_id
+            )
+        )).all()
+        assert [event.status for event in offered] == ["offered"]
     await db.close()
 
 

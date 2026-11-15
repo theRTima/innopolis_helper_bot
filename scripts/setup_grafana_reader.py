@@ -21,8 +21,40 @@ VIEWS = {
         FROM analytics GROUP BY 1, 2
     """,
     "grafana_escalation_events_daily": """
-        SELECT date_trunc('day', created_at) AS day, status, count(*)::bigint AS total
-        FROM escalation_events GROUP BY 1, 2
+        SELECT date_trunc('day', event_at) AS day, status,
+               count(*)::bigint AS total
+        FROM (
+            -- Legacy delivered/failed events described a link, not a provider ticket.
+            SELECT e.created_at AS event_at,
+                   CASE e.status WHEN 'delivered' THEN 'legacy_link_sent'
+                                 WHEN 'failed' THEN 'legacy_link_failed'
+                                 ELSE e.status END AS status
+            FROM escalation_events e
+            WHERE e.status IN ('offered', 'requested')
+               OR (e.status IN ('delivered', 'failed') AND NOT EXISTS (
+                   SELECT 1 FROM ticket_jobs t
+                   WHERE t.kind = 'support' AND t.question_id = e.question_id
+               ))
+            UNION ALL
+            -- One confirmed creation per support job, dated by the worker event.
+            SELECT COALESCE((
+                       SELECT max(e.created_at) FROM escalation_events e
+                       WHERE e.question_id = t.question_id
+                         AND e.status = 'delivered'
+                   ), t.created_at) AS event_at,
+                   'created' AS status
+            FROM ticket_jobs t
+            WHERE t.kind = 'support' AND t.external_id IS NOT NULL
+            UNION ALL
+            SELECT COALESCE((
+                       SELECT max(e.created_at) FROM escalation_events e
+                       WHERE e.question_id = t.question_id
+                         AND e.status = 'failed'
+                   ), t.updated_at) AS event_at,
+                   'failed' AS status
+            FROM ticket_jobs t
+            WHERE t.kind = 'support' AND t.state = 'failed'
+        ) events GROUP BY 1, 2
     """,
     "grafana_import_details_daily": """
         SELECT date_trunc('day', created_at) AS day, parser, imported,
@@ -36,13 +68,24 @@ VIEWS = {
     """,
     "grafana_outcomes_daily": """
         SELECT date_trunc('day', COALESCE(a.received_at, q.created_at::timestamp)) AS day,
-               CASE WHEN a.operator_status IN ('requested', 'delivered', 'failed')
+               CASE WHEN t.id IS NOT NULL
+                              OR a.operator_status = 'requested'
+                              OR qa.escalation_status = 'requested'
                     THEN 'unresolved' ELSE COALESCE(a.resolution, 'unknown') END AS status,
                count(*)::bigint AS total,
-               count(*) FILTER (WHERE a.operator_status IS NOT NULL)::bigint AS escalated,
-               sum(EXTRACT(EPOCH FROM (a.sent_at - a.received_at))) AS response_seconds,
-               count(*) FILTER (WHERE a.sent_at IS NOT NULL AND a.received_at IS NOT NULL)::bigint AS response_count
-        FROM questions q LEFT JOIN analytics a ON a.question_id = q.id GROUP BY 1, 2
+               count(*) FILTER (WHERE t.id IS NOT NULL
+                                  OR a.operator_status = 'requested'
+                                  OR qa.escalation_status = 'requested')::bigint AS escalated,
+               sum(EXTRACT(EPOCH FROM (a.sent_at - a.received_at)))
+                   FILTER (WHERE a.sent_at >= a.received_at) AS response_seconds,
+               count(*) FILTER (WHERE a.sent_at >= a.received_at)::bigint AS response_count
+        FROM questions q
+        JOIN analytics a ON a.question_id = q.id
+        LEFT JOIN question_analytics qa ON qa.question_id = q.id
+        LEFT JOIN ticket_jobs t ON t.question_id = q.id AND t.kind = 'support'
+        WHERE a.delivery_status = 'delivered'
+          AND a.answer_status IN ('with_sources', 'no_evidence', 'unverified', 'error')
+        GROUP BY 1, 2
     """,
     "grafana_answer_daily": """
         SELECT date_trunc('day', created_at) AS day,
@@ -56,9 +99,7 @@ VIEWS = {
         FROM feedback GROUP BY 1, 2
     """,
     "grafana_operator_daily": """
-        SELECT date_trunc('day', created_at) AS day,
-               operator_status AS status, count(*)::bigint AS total
-        FROM analytics WHERE operator_status IS NOT NULL GROUP BY 1, 2
+        SELECT day, status, total FROM grafana_escalation_events_daily
     """,
     "grafana_import_daily": """
         SELECT date_trunc('day', created_at) AS day,

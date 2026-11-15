@@ -8,6 +8,8 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 def feedback_keyboard(
     question_id: int | None,
     source_links: list[tuple[str, str]] | None = None,
+    *,
+    ticket_enabled: bool = False,
 ) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=label, url=url)]
@@ -15,7 +17,20 @@ def feedback_keyboard(
     ]
     if question_id is not None:
         rows.append([
-            InlineKeyboardButton(text="Вопрос решён: да", callback_data=f"resolution:resolved:{question_id}"),
-            InlineKeyboardButton(text="Нет", callback_data=f"resolution:unresolved:{question_id}"),
+            InlineKeyboardButton(
+                text="Вопрос решён: да",
+                callback_data=f"resolution:resolved:{question_id}",
+            ),
+            InlineKeyboardButton(
+                text="Нет",
+                callback_data=f"resolution:unresolved:{question_id}",
+            ),
         ])
+        if ticket_enabled:
+            rows.append([
+                InlineKeyboardButton(
+                    text="Создать заявку",
+                    callback_data=f"ticket:create:{question_id}",
+                )
+            ])
     return InlineKeyboardMarkup(inline_keyboard=rows)

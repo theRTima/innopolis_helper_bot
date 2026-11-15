@@ -12,16 +12,18 @@
       "id": 1, "title": "Вопросов всего", "type": "stat",
       "gridPos": {"h": 5, "w": 6, "x": 0, "y": 0},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
-      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_outcomes_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day'"}]
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(questions), 0)::bigint AS value FROM grafana_activity_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day'"}]
     },
     {
-      "id": 2, "title": "Подтверждённо решено", "type": "stat",
+      "id": 2, "title": "Подтверждённо решено ботом", "type": "stat",
+      "description": "Только ответы, доставленные пользователю; решение подтвердил сам пользователь, заявка в поддержку не запрашивалась.",
       "gridPos": {"h": 5, "w": 6, "x": 6, "y": 0},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
       "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_outcomes_daily WHERE status = 'resolved' AND day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day'"}]
     },
     {
-      "id": 3, "title": "Не решено", "type": "stat",
+      "id": 3, "title": "Не решено / запрошена поддержка", "type": "stat",
+      "description": "Только доставленные ответы: пользователь отметил вопрос нерешённым или запросил поддержку.",
       "gridPos": {"h": 5, "w": 6, "x": 12, "y": 0},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
       "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_outcomes_daily WHERE status = 'unresolved' AND day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day'"}]
@@ -30,10 +32,10 @@
       "id": 4, "title": "Запросов связи со специалистом", "type": "stat",
       "gridPos": {"h": 5, "w": 6, "x": 18, "y": 0},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
-      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(escalated), 0)::bigint AS value FROM grafana_outcomes_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day'"}]
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT COALESCE(sum(total), 0)::bigint AS value FROM grafana_escalation_events_daily WHERE status = 'requested' AND day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day'"}]
     },
     {
-      "id": 5, "title": "Исходы вопросов (unknown — без оценки)", "type": "table",
+      "id": 5, "title": "Исходы доставленных ответов (unknown — без оценки)", "type": "table",
       "gridPos": {"h": 9, "w": 12, "x": 0, "y": 5},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
       "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT status, sum(total)::bigint AS questions FROM grafana_outcomes_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day' GROUP BY status ORDER BY questions DESC"}]
@@ -51,7 +53,8 @@
       "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT sum(response_seconds) / NULLIF(sum(response_count), 0) AS value FROM grafana_outcomes_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day'"}]
     },
     {
-      "id": 8, "title": "Доля подтверждённо решённых вопросов боту, %", "type": "stat",
+      "id": 8, "title": "Доля подтверждённо решённых доставленных ответов бота, %", "type": "stat",
+      "description": "Числитель — подтверждённо решённые без запроса поддержки; знаменатель — доставленные обычные ответы. Уведомления об ограничении, подавленные и неотправленные ответы исключены.",
       "gridPos": {"h": 5, "w": 9, "x": 6, "y": 14},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
       "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT 100.0 * COALESCE(sum(total) FILTER (WHERE status = 'resolved'), 0) / NULLIF(sum(total), 0) AS value FROM grafana_outcomes_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day'"}]
@@ -65,7 +68,7 @@
     },
     {
       "id": 10, "title": "Исходы вопросов по дням", "type": "timeseries",
-      "description": "Решённым считается только подтверждённый пользователем вопрос без последующей передачи специалисту.",
+      "description": "Только доставленные обычные ответы. Решённым считается вопрос, который подтвердил пользователь и по которому не запрашивал поддержку.",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 19},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
       "targets": [{"refId": "A", "format": "time_series", "rawSql": "SELECT day AS time, status AS metric, sum(total)::bigint AS value FROM grafana_outcomes_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day' GROUP BY day, status ORDER BY day"}]
@@ -79,14 +82,14 @@
     },
     {
       "id": 12, "title": "Доставка ответов по дням", "type": "timeseries",
-      "description": "delivered — отправлено пользователю; failed — ошибка отправки; suppressed — без отправки во время ограничения; unknown — исторические записи.",
+      "description": "delivered — обычный ответ отправлен пользователю; failed — ошибка отправки; rate_limited — уведомление об ограничении; suppressed — без отправки; unknown — исторические записи.",
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 27},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
       "targets": [{"refId": "A", "format": "time_series", "rawSql": "SELECT day AS time, status AS metric, sum(total)::bigint AS value FROM grafana_delivery_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day' GROUP BY day, status ORDER BY day"}]
     },
     {
-      "id": 13, "title": "Передача ссылки специалиста: события", "type": "timeseries",
-      "description": "События, не число обращений. delivered означает отправку кнопки пользователю, а не получение обращения специалистом.",
+      "id": 13, "title": "Этапы обращения в поддержку по дням", "type": "timeseries",
+      "description": "offered — предложена заявка, requested — пользователь запросил поддержку, created — система подтвердила создание тикета, failed — окончательная ошибка создания. legacy_link_sent/failed — старые события отправки ссылки.",
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 35},
       "datasource": {"type": "postgres", "uid": "bot-analytics-db"},
       "targets": [{"refId": "A", "format": "time_series", "rawSql": "SELECT day AS time, status AS metric, sum(total)::bigint AS value FROM grafana_escalation_events_daily WHERE day >= date_trunc('day', $__timeFrom()::timestamptz) AND day < date_trunc('day', $__timeTo()::timestamptz) + interval '1 day' GROUP BY day, status ORDER BY day"}]

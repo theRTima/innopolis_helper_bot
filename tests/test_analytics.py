@@ -8,13 +8,28 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.analytics.labeling import classify_pending
-from app.analytics.report import QuestionRecord, build_report, load_records
+from app.analytics.report import (
+    IssueTaskRecord, QuestionRecord, build_report, build_task_links,
+    load_issue_tasks, load_records,
+)
 from app.analytics.taxonomy import load_areas
 from app.analytics.web import create_app
-from app.bot.handlers import handle_question
-from app.rag.index import Chunk
 from app.storage.db import Database
-from app.storage.models import QuestionAnalytics
+from app.storage.models import QuestionAnalytics, TicketJob
+
+
+async def save_answered(
+    db: Database, *, telegram_id: int, question: str,
+    answer: str, sources: list[dict], status: str,
+) -> int:
+    question_id = await db.save_question(
+        telegram_id=telegram_id, chat_id=telegram_id, question=question,
+    )
+    await db.save_delivery(
+        question_id=question_id, answer=answer, sources=sources,
+        status=status, delivered=True,
+    )
+    return question_id
 
 
 async def test_group_reuse_with_real_storage_and_distinct_users(tmp_path):
@@ -43,35 +58,50 @@ async def test_group_reuse_with_real_storage_and_distinct_users(tmp_path):
     try:
         model = Model()
         areas = load_areas()
-        first = await db.save_question(
-            telegram_id=101, chat_id=101,
+        first = await save_answered(
+            db, telegram_id=101,
             question="Где найти календарь? @private_user",
             answer="Инструкция [1]",
             sources=[{"document": "БАРС-Офис", "page": "4"}],
-            answer_status="with_sources",
+            status="with_sources",
         )
         await db.record_escalation(question_id=first, status="requested")
         assert await classify_pending(db, model, areas, limit=20) == (1, 1)
         await db.record_escalation(question_id=first, status="delivered")
         await db.record_escalation(question_id=first, status="failed")
-
-        second = await db.save_question(
-            telegram_id=101, chat_id=101, question="Как открыть календарь?",
-            answer="Нет данных", sources=[], answer_status="no_evidence",
+        job, _ = await db.enqueue_ticket(
+            kind="support", provider="demo",
+            dedupe_key=f"support:{first}",
+            payload={"title": "Помощь", "description": "Вопрос клиента"},
+            question_id=first, telegram_id=101,
         )
-        await db.save_question(
-            telegram_id=202, chat_id=202, question="Куда зайти за календарём?",
+        assert await db.claim_next_ticket(provider="demo") is not None
+        await db.mark_ticket_created(
+            ticket_id=job.id, external_id="DEMO-1",
+            url="demo://tickets/DEMO-1", status="new",
+        )
+
+        second = await save_answered(
+            db, telegram_id=101, question="Как открыть календарь?",
+            answer="Нет данных", sources=[], status="no_evidence",
+        )
+        third = await save_answered(
+            db, telegram_id=202, question="Куда зайти за календарём?",
             answer="Инструкция [1]",
             sources=[{"document": "БАРС-Офис", "page": "4"}],
-            answer_status="with_sources",
+            status="with_sources",
+        )
+        await db.save_resolution(
+            question_id=third, telegram_id=202, value="resolved"
         )
         # Only the asker's current rating counts for the question.
         await db.save_feedback(
             question_id=first, telegram_id=101, value="helpful"
         )
-        await db.save_feedback(
-            question_id=first, telegram_id=202, value="not_helpful"
-        )
+        with pytest.raises(ValueError):
+            await db.save_feedback(
+                question_id=first, telegram_id=202, value="not_helpful"
+            )
         await db.save_feedback(
             question_id=second, telegram_id=101, value="helpful"
         )
@@ -89,8 +119,10 @@ async def test_group_reuse_with_real_storage_and_distinct_users(tmp_path):
         assert (stats.total, stats.users, stats.no_evidence) == (3, 2, 1)
         assert (stats.rated, stats.helpful) == (2, 1)
         assert (stats.delivered, stats.failed, stats.escalations) == (1, 0, 1)
+        assert (stats.eligible, stats.confirmed_resolved) == (3, 1)
         [signal] = report.signals
         assert signal.title == "Поиск календаря"
+        assert signal.documents == ("БАРС-Офис",)
         assert len(signal.examples) == 2
         assert all("@private_user" not in text for text in signal.examples)
         # An unanalyzable model response cannot manufacture records.
@@ -105,10 +137,8 @@ async def test_bad_model_output_leaves_question_pending(tmp_path):
     db = Database(tmp_path / "bot.sqlite3")
     await db.init()
     try:
-        await db.save_question(
-            telegram_id=1, chat_id=1, question="Как пройти согласование?",
-            answer="Инструкция [1]", sources=[],
-        )
+        await db.save_question(telegram_id=1, chat_id=1,
+                               question="Как пройти согласование?")
         model = SimpleNamespace(
             analyze_support_questions=AsyncMock(return_value="мимо JSON")
         )
@@ -145,42 +175,119 @@ def test_growth_uses_equal_periods_and_coverage():
     assert not report.signals[0].rising
 
 
-@pytest.mark.parametrize(
-    ("results", "reply", "status"),
-    [
-        (False, "", "no_evidence"),
-        (True, "Смотрите справку [1].", "with_sources"),
-        (True, "Смотрите справку [2].", "unverified"),
-        (True, RuntimeError("network"), "error"),
-    ],
-)
-async def test_bot_passes_real_answer_status(results, reply, status):
-    chunk = Chunk(
-        chunk_id="demo:7",
-        document="Документ",
-        page_from=7,
-        page_to=7,
-        text="Текст справки",
+def test_confirmed_resolution_excludes_escalated_and_suppressed():
+    now = datetime(2026, 11, 15, 9, tzinfo=UTC)
+    rows = [
+        QuestionRecord(
+            now - timedelta(minutes=1), 1, resolution="resolved",
+            delivery_status="delivered", answer_status="with_sources",
+        ),
+        QuestionRecord(
+            now - timedelta(minutes=1), 2, resolution="resolved",
+            delivery_status="delivered", answer_status="with_sources",
+            escalation_status="requested",
+        ),
+        QuestionRecord(
+            now - timedelta(minutes=1), 3, resolution="resolved",
+            delivery_status="rate_limited", answer_status="unverified",
+        ),
+    ]
+    counts = build_report(rows, days=7, end=now).current
+    assert (counts.total, counts.eligible, counts.confirmed_resolved) == (
+        3, 2, 1,
     )
-    matches = [(1, chunk)] if results else []
-    index = SimpleNamespace(search=lambda *_, **__: matches)
-    llm = SimpleNamespace(answer_question=AsyncMock())
-    if isinstance(reply, Exception):
-        llm.answer_question.side_effect = reply
-    else:
-        llm.answer_question.return_value = reply
-    message = SimpleNamespace(
-        text="Где раздел?", from_user=SimpleNamespace(id=9),
-        chat=SimpleNamespace(id=9),
-        bot=SimpleNamespace(send_chat_action=AsyncMock()), answer=AsyncMock(),
+    assert (counts.unresolved, counts.suppressed) == (1, 1)
+
+
+def test_offered_link_does_not_count_as_requested_support():
+    now = datetime(2026, 11, 15, 9, tzinfo=UTC)
+    row = QuestionRecord(
+        now - timedelta(minutes=1), 1,
+        resolution="resolved", delivery_status="delivered",
+        answer_status="with_sources", escalation_status="offered",
     )
-    db = SimpleNamespace(save_question=AsyncMock(return_value=1))
-    settings = SimpleNamespace(
-        top_k=2, min_score=0, documents_base_url="", document_link_secret=""
+    counts = build_report([row], days=7, end=now).current
+    assert counts.confirmed_resolved == 1
+    assert counts.escalations == 0
+    assert counts.unresolved == 0
+
+
+async def test_historic_link_delivery_is_not_a_ticket(tmp_path):
+    db = Database(tmp_path / "old.sqlite3")
+    await db.init()
+    try:
+        question_id = await save_answered(
+            db, telegram_id=1, question="Где инструкция?",
+            answer="Есть инструкция", sources=[], status="unverified",
+        )
+        await db.record_escalation(
+            question_id=question_id, status="delivered"
+        )
+        await db.save_resolution(
+            question_id=question_id, telegram_id=1, value="resolved"
+        )
+        now = datetime.now(UTC)
+        records = await load_records(
+            db, since=now - timedelta(days=1), until=now,
+            show_examples=False,
+        )
+        assert records[0].escalation_status == "offered"
+        counts = build_report(records, days=7, end=now).current
+        assert counts.confirmed_resolved == 1
+        assert counts.delivered == 0
+    finally:
+        await db.close()
+
+
+def test_task_effect_uses_complete_equal_windows():
+    end = datetime(2026, 11, 15, 9, tzinfo=UTC)
+    closed = end - timedelta(days=8)
+    task = IssueTaskRecord(
+        "bars_office", "navigation", "Поиск календаря",
+        "BO-12", "https://example.com/BO-12", "done", closed,
     )
-    await handle_question(message, index, llm, db, settings)
-    assert db.save_question.call_args.kwargs["answer_status"] == status
-    assert message.answer.await_count == 1
+    rows = [
+        QuestionRecord(closed - timedelta(days=1), 1, "bars_office",
+                       "navigation", "Поиск календаря", "no_evidence",
+                       resolution="unresolved", delivery_status="delivered"),
+        QuestionRecord(closed + timedelta(days=1), 2, "bars_office",
+                       "navigation", "Поиск календаря", "with_sources",
+                       resolution="resolved", delivery_status="delivered"),
+    ]
+    key = (task.area, task.kind, task.title)
+    links = build_task_links(
+        rows, [task], days=7, end=end,
+        data_start=end - timedelta(days=20),
+    )
+    assert (links[key].before_total, links[key].after_total) == (1, 1)
+    assert (
+        links[key].before_unresolved, links[key].after_unresolved
+    ) == (1, 0)
+    pending = build_task_links(
+        rows, [task], days=14, end=end,
+        data_start=end - timedelta(days=30),
+    )
+    assert pending[key].after_total is None
+
+
+async def test_issue_task_metadata_is_available_to_dashboard(tmp_path):
+    db = Database(tmp_path / "tasks.sqlite3")
+    await db.init()
+    try:
+        async with db.session() as session, session.begin():
+            session.add(TicketJob(
+                dedupe_key="improvement:calendar",
+                kind="improvement", provider="jira",
+                issue_area="bars_office", issue_kind="navigation",
+                issue_title="Поиск календаря", payload={},
+                state="created", external_id="BO-12",
+                external_url="https://example.com/BO-12",
+            ))
+        [task] = await load_issue_tasks(db)
+        assert task.title == "Поиск календаря"
+        assert task.external_id == "BO-12"
+    finally:
+        await db.close()
 
 
 async def test_dashboard_requires_login_and_escapes_stored_labels(
@@ -196,14 +303,24 @@ async def test_dashboard_requires_login_and_escapes_stored_labels(
     try:
         labels = []
         for user_id in range(1, 4):
-            question_id = await db.save_question(
-                telegram_id=user_id, chat_id=user_id,
+            question_id = await save_answered(
+                db, telegram_id=user_id,
                 question="A question with a sensitive detail",
-                answer="Test", sources=[], answer_status="no_evidence",
+                answer="Test", sources=[], status="no_evidence",
             )
             label = "<script>test</script>"
             labels.append((question_id, "checkout", "navigation", label))
         await db.save_question_labels(labels)
+        async with db.session() as session, session.begin():
+            session.add(TicketJob(
+                dedupe_key="improvement:escaped",
+                kind="improvement", provider="jira",
+                issue_area="checkout", issue_kind="navigation",
+                issue_title="<script>test</script>", payload={},
+                state="closed", external_id="BO-14",
+                external_url="https://example.com/BO-14",
+                closed_at=datetime.now(UTC) - timedelta(days=8),
+            ))
     finally:
         await db.close()
 
@@ -222,6 +339,8 @@ async def test_dashboard_requires_login_and_escapes_stored_labels(
         assert result.status_code == 200
         assert "Оформление заказа" in result.text
         assert "&lt;script&gt;test&lt;/script&gt;" in result.text
+        assert "После закрытия задач" in result.text
+        assert "BO-14" in result.text
         assert "A question with a sensitive detail" not in result.text
         assert result.headers["Cache-Control"] == "private, no-store"
         assert "Размечено 3 из 3 вопросов" in result.text

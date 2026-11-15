@@ -193,6 +193,46 @@ class EscalationEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())
 
 
+class TicketJob(Base):
+    """Durable outbound request and the link to its provider ticket."""
+
+    __tablename__ = "ticket_jobs"
+    __table_args__ = (
+        CheckConstraint("kind IN ('support', 'improvement')", name="ck_ticket_jobs_kind"),
+        CheckConstraint(
+            "state IN ('queued', 'creating', 'created', 'retry', 'uncertain', 'failed', 'closed')",
+            name="ck_ticket_jobs_state",
+        ),
+        UniqueConstraint("kind", "issue_area", "issue_kind", "issue_title", name="uq_ticket_jobs_issue"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    dedupe_key: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    question_id: Mapped[int | None] = mapped_column(ForeignKey("questions.id"), unique=True)
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger)
+    issue_area: Mapped[str | None] = mapped_column(String(32))
+    issue_kind: Mapped[str | None] = mapped_column(String(32))
+    issue_title: Mapped[str | None] = mapped_column(String(96))
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    external_id: Mapped[str | None] = mapped_column(String(255))
+    external_url: Mapped[str | None] = mapped_column(Text)
+    external_status: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.current_timestamp(),
+        onupdate=func.current_timestamp(),
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class Citation(Base):
     __tablename__ = "citations"
     __table_args__ = (UniqueConstraint("answer_id", "position", name="uq_citation_answer_position"),)

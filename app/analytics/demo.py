@@ -21,9 +21,15 @@ def example_records(now: datetime) -> list[QuestionRecord]:
         for position, example in enumerate(examples):
             missing = position < unsure
             feedback = "helpful" if position % 2 else None
+            received_at = now - timedelta(days=age, minutes=position)
+            document = {
+                "bars_office": "БАРС-Офис.pdf",
+                "business_trip": "БП Командировка.pdf",
+                "furniture": "Реестр мебели.pdf",
+            }.get(area)
             rows.append(
                 QuestionRecord(
-                    created_at=now - timedelta(days=age, minutes=position),
+                    created_at=received_at,
                     user_id=len(rows) + 1,
                     area=area,
                     kind=kind,
@@ -34,6 +40,14 @@ def example_records(now: datetime) -> list[QuestionRecord]:
                         "delivered" if operator and missing else None
                     ),
                     example=example,
+                    resolution=(
+                        "unresolved" if missing else
+                        "resolved" if position % 2 else None
+                    ),
+                    delivery_status="delivered",
+                    received_at=received_at,
+                    sent_at=received_at + timedelta(seconds=8 + position),
+                    documents=(document,) if document else (),
                 )
             )
 

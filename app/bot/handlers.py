@@ -9,16 +9,21 @@ import re
 from aiogram import F, Router
 from aiogram.enums import ChatAction
 from aiogram.filters import Command, CommandStart
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+)
 
 from app.anchors import Locator, LocatorKind, build_anchor_url
 from app.bot.keyboards import feedback_keyboard
-from app.bot.input_filter import GibberishMute, RateLimiter, SpamCooldown, valid_question
+from app.bot.input_filter import (
+    GibberishMute, RateLimiter, SpamCooldown, valid_question,
+)
 from app.config import Settings
 from app.llm.client import EMPTY_ANSWER_MESSAGE, LLMClient
 from app.rag.index import Chunk, SearchIndex
 from app.rag.retrieve import retrieve_context
 from app.storage.db import Database
+from app.tickets.service import request_support_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,81 @@ LLM_ERROR_MESSAGE = (
     "LLM_API_KEY и LLM_MODEL, затем попробуйте ещё раз."
 )
 MAX_MESSAGE_LENGTH = 3600
+OPERATOR_REQUEST = re.compile(
+    r"(?iu)^\s*(?:пожалуйста[, ]+)?(?:оператор|человек|"
+    r"позовите оператора|свяжите с оператором|"
+    r"соедините с оператором|можно связаться с оператором|"
+    r"можно оператора|(?:мне )?нужен оператор|"
+    r"хочу (?:связаться с )?оператором|хочу оператора|"
+    r"позовите человека|(?:мне )?нужен человек|"
+    r"позовите специалиста)\s*(?:,? пожалуйста)?[.!?]?\s*$"
+)
+
+
+def _ticket_message(job) -> str:
+    if job.external_id:
+        return (
+            f"Заявка {job.external_id} создана. "
+            f"Статус: {job.external_status or job.state}."
+        )
+    if job.state == "uncertain":
+        return (
+            f"Запрос #{job.id} проверяется: ответ тикет-системы "
+            "не получен. Повторную заявку не создаю."
+        )
+    if job.state == "failed":
+        return (
+            f"Запрос #{job.id} не удалось передать. "
+            "Сообщите администратору номер запроса."
+        )
+    return (
+        f"Запрос #{job.id} принят. Статус: в очереди. "
+        "Пришлю номер заявки после создания в тикет-системе."
+    )
+
+
+async def _request_operator(
+    message: Message, db: Database, settings: Settings
+) -> None:
+    if message.from_user is None:
+        return
+    provider = getattr(settings, "ticket_provider", "")
+    if not provider:
+        if settings.support_url:
+            await message.answer(
+                "Связаться со специалистом:",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                    InlineKeyboardButton(
+                        text="Открыть поддержку", url=settings.support_url
+                    )
+                ]]),
+            )
+            latest = await db.latest_question_id(
+                telegram_id=message.from_user.id, chat_id=message.chat.id
+            )
+            if latest is not None:
+                await db.record_escalation(
+                    question_id=latest, status="offered"
+                )
+        else:
+            await message.answer("Создание заявок пока не настроено.")
+        return
+    question_id = await db.latest_question_id(
+        telegram_id=message.from_user.id, chat_id=message.chat.id
+    )
+    if question_id is None:
+        question_id = await db.save_question(
+            telegram_id=message.from_user.id,
+            chat_id=message.chat.id,
+            question=(message.text or "").strip() or "Запрос оператора",
+        )
+    job, _ = await request_support_ticket(
+        db,
+        question_id=question_id,
+        telegram_id=message.from_user.id,
+        provider=provider,
+    )
+    await message.answer(_ticket_message(job))
 
 
 def _format_sources(
@@ -79,7 +159,7 @@ async def handle_start(message: Message, index: SearchIndex) -> None:
         "Задайте вопрос текстом — я найду подходящие фрагменты, отвечу по ним "
         "и покажу документ и страницу.\n\n"
         f"{corpus_text}\n\n"
-        "Команды: /help — справка."
+        "Команды: /help — справка, /operator — заявка специалисту."
     )
 
 
@@ -93,8 +173,18 @@ async def handle_help(message: Message) -> None:
         "2. Бот найдёт фрагменты в загруженных PDF и ответит со ссылкой на "
         "источник.\n"
         "3. Отметьте, решён ли ваш вопрос.\n\n"
-        "Если в документации нет ответа, бот честно об этом скажет."
+        "Если в документации нет ответа, бот честно об этом скажет. "
+        "Для заявки специалисту используйте /operator."
     )
+
+
+@router.message(Command("operator"))
+async def handle_operator_command(
+    message: Message, db: Database, settings: Settings
+) -> None:
+    if message.from_user and gibberish_mute.is_muted(message.from_user.id):
+        return
+    await _request_operator(message, db, settings)
 
 
 @router.message(F.text & ~F.text.startswith("/"))
@@ -111,12 +201,18 @@ async def handle_question(
 
     if gibberish_mute.is_muted(message.from_user.id):
         return
+    if OPERATOR_REQUEST.fullmatch(question):
+        await _request_operator(message, db, settings)
+        return
     if not valid_question(question):
         gibberish_mute.record_invalid(message.from_user.id)
         return
 
-    question_id = await db.save_question(telegram_id=message.from_user.id,
-                                         chat_id=message.chat.id, question=question)
+    question_id = await db.save_question(
+        telegram_id=message.from_user.id,
+        chat_id=message.chat.id,
+        question=question,
+    )
     cooldown_state = spam_cooldown.check(message.from_user.id)
     if cooldown_state == "blocked":
         await db.suppress_delivery(question_id=question_id)
@@ -130,9 +226,17 @@ async def handle_question(
         try:
             await message.answer(notice)
         except Exception:
-            await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=False)
+            await db.save_delivery(
+                question_id=question_id, answer=notice, sources=[],
+                status="unverified", delivered=False,
+                delivery_status="rate_limited",
+            )
             raise
-        await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=True)
+        await db.save_delivery(
+            question_id=question_id, answer=notice, sources=[],
+            status="unverified", delivered=True,
+            delivery_status="rate_limited",
+        )
         return
     if not rate_limiter.allow(message.from_user.id, message.chat.id):
         wait = max(
@@ -151,19 +255,30 @@ async def handle_question(
         try:
             await message.answer(notice)
         except Exception:
-            await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=False)
+            await db.save_delivery(
+                question_id=question_id, answer=notice, sources=[],
+                status="unverified", delivered=False,
+                delivery_status="rate_limited",
+            )
             raise
-        await db.save_delivery(question_id=question_id, answer=notice, sources=[], status="unverified", delivered=True)
+        await db.save_delivery(
+            question_id=question_id, answer=notice, sources=[],
+            status="unverified", delivered=True,
+            delivery_status="rate_limited",
+        )
         return
 
     try:
-        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+        await message.bot.send_chat_action(
+            chat_id=message.chat.id, action=ChatAction.TYPING
+        )
     except Exception:
         logger.warning("Unable to send typing indicator", exc_info=True)
     search_error = False
     try:
         results = retrieve_context(
-            index, question, top_k=settings.top_k, min_score=settings.min_score,
+            index, question,
+            top_k=settings.top_k, min_score=settings.min_score,
         )
     except Exception:
         logger.exception("Retrieval failed")
@@ -225,29 +340,35 @@ async def handle_question(
                     ),
                 )
             )
-    escalate = status == "no_evidence" and await db.clarification_count(
+    offer_support = status == "no_evidence" and await db.clarification_count(
         telegram_id=message.from_user.id, chat_id=message.chat.id) >= 3
-    if escalate:
-        await db.record_escalation(question_id=question_id, status="requested")
-        if settings.support_url:
-            source_links.append(("Связаться со специалистом", settings.support_url))
-        else:
-            reply += "\n\nСсылка на специалиста пока не настроена."
+    if offer_support and settings.support_url:
+        source_links.append(
+            ("Связаться со специалистом", settings.support_url)
+        )
     markup = (
-        feedback_keyboard(question_id, source_links)
+        feedback_keyboard(
+            question_id,
+            source_links,
+            ticket_enabled=bool(getattr(settings, "ticket_provider", "")),
+        )
         if question_id is not None or source_links
         else None
     )
     try:
         await message.answer(reply, reply_markup=markup)
     except Exception:
-        await db.save_delivery(question_id=question_id, answer=answer, sources=sources, status=status, delivered=False)
-        if escalate:
-            await db.record_escalation(question_id=question_id, status="failed")
+        await db.save_delivery(
+            question_id=question_id, answer=answer, sources=sources,
+            status=status, delivered=False,
+        )
         raise
-    await db.save_delivery(question_id=question_id, answer=answer, sources=sources, status=status, delivered=True)
-    if escalate:
-        await db.record_escalation(question_id=question_id, status="delivered" if settings.support_url else "failed")
+    await db.save_delivery(
+        question_id=question_id, answer=answer, sources=sources,
+        status=status, delivered=True,
+    )
+    if offer_support and settings.support_url:
+        await db.record_escalation(question_id=question_id, status="offered")
 
 
 @router.callback_query(F.data.startswith("fb:"))
@@ -285,38 +406,99 @@ async def handle_feedback(callback: CallbackQuery, db: Database) -> None:
 
 async def _remove_answer_buttons(callback: CallbackQuery) -> None:
     message = callback.message
-    if message is None or not isinstance(message, Message) or message.reply_markup is None:
+    if (
+        message is None or not isinstance(message, Message)
+        or message.reply_markup is None
+    ):
         return
-    rows = [
-        remaining for row in message.reply_markup.inline_keyboard
-        if (remaining := [button for button in row if not (button.callback_data or "").startswith(("fb:", "resolution:"))])
-    ]
+    rows = []
+    for row in message.reply_markup.inline_keyboard:
+        remaining = [
+            button for button in row
+            if not (button.callback_data or "").startswith(
+                ("fb:", "resolution:")
+            )
+        ]
+        if remaining:
+            rows.append(remaining)
     try:
-        await message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+        markup = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+        await message.edit_reply_markup(reply_markup=markup)
     except Exception:
         logger.exception("Could not remove answer buttons")
 
 
 @router.callback_query(F.data.startswith("resolution:"))
-async def handle_resolution(callback: CallbackQuery, db: Database) -> None:
+async def handle_resolution(
+    callback: CallbackQuery, db: Database, settings: Settings
+) -> None:
     try:
         _, value, raw_id = (callback.data or "").split(":")
-        await db.save_resolution(question_id=int(raw_id), telegram_id=callback.from_user.id, value=value)
+        await db.save_resolution(
+            question_id=int(raw_id),
+            telegram_id=callback.from_user.id,
+            value=value,
+        )
     except (ValueError, TypeError):
         await callback.answer("Не удалось сохранить ответ.")
         return
-    await callback.answer("Спасибо, ответ сохранён.")
+    response = "Спасибо, ответ сохранён."
+    if value == "unresolved" and getattr(settings, "ticket_provider", ""):
+        response = "Вопрос не решён. Нажмите «Создать заявку» под ответом."
+    await callback.answer(response)
     await _remove_answer_buttons(callback)
+
+
+@router.callback_query(F.data.startswith("ticket:create:"))
+async def handle_ticket_create(
+    callback: CallbackQuery, db: Database, settings: Settings
+) -> None:
+    provider = getattr(settings, "ticket_provider", "")
+    if not provider:
+        await callback.answer(
+            "Создание заявок пока не настроено.", show_alert=True
+        )
+        return
+    try:
+        raw_id = (callback.data or "").split(":")
+        if len(raw_id) != 3 or raw_id[:2] != ["ticket", "create"]:
+            raise ValueError("Invalid ticket callback")
+        question_id = int(raw_id[2])
+        job, _ = await request_support_ticket(
+            db,
+            question_id=question_id,
+            telegram_id=callback.from_user.id,
+            provider=provider,
+        )
+    except (ValueError, TypeError):
+        await callback.answer(
+            "Не удалось создать заявку для этого вопроса.",
+            show_alert=True,
+        )
+        return
+    except Exception:
+        logger.exception("Could not queue support ticket")
+        await callback.answer(
+            "Заявка пока недоступна. Повторите позже.", show_alert=True
+        )
+        return
+    await callback.answer("Запрос принят.")
+    if isinstance(callback.message, Message):
+        await callback.message.answer(_ticket_message(job))
 
 
 @router.message(F.text.startswith("/"))
 async def handle_unknown_command(
-    message: Message, index: SearchIndex, llm: LLMClient, db: Database, settings: Settings
+    message: Message, index: SearchIndex, llm: LLMClient,
+    db: Database, settings: Settings,
 ) -> None:
     if message.from_user and gibberish_mute.is_muted(message.from_user.id):
         return
     text = (message.text or "").strip()
-    if re.fullmatch(r"/[a-zA-Z0-9_]{1,32}(?:@[a-zA-Z0-9_]{1,32})?(?:\s.*)?", text):
+    if re.fullmatch(
+        r"/[a-zA-Z0-9_]{1,32}(?:@[a-zA-Z0-9_]{1,32})?(?:\s.*)?",
+        text,
+    ):
         await message.answer("Неизвестная команда. Доступны /start и /help.")
         return
     await handle_question(message, index, llm, db, settings)
