@@ -1,0 +1,115 @@
+name: innopolis-helper-bot
+
+x-app: &app
+  build: .
+  image: innopolis-helper-bot:local
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+asyncpg://bot:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/bot
+    KNOWLEDGE_DIR: /app/data/knowledge
+    DOCUMENTS_DIR: /app/data/processed/documents
+  extra_hosts:
+    # Allows a host-run OpenAI-compatible server to be reached from containers.
+    - "host.docker.internal:host-gateway"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: bot
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot -d bot"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  bot:
+    <<: *app
+    restart: unless-stopped
+    command: ["python", "-m", "app"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data/knowledge:/app/data/knowledge:ro
+      - ./data/processed:/app/data/processed:ro
+
+  viewer:
+    <<: *app
+    restart: unless-stopped
+    command:
+      - "uvicorn"
+      - "app.anchors.viewer:app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8090"
+    ports:
+      # Loopback only; expose through an HTTPS reverse proxy for real users.
+      - "127.0.0.1:${VIEWER_PORT:-8090}:8090"
+    volumes:
+      - ./data/knowledge:/app/data/knowledge:ro
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import socket; socket.create_connection(('127.0.0.1', 8090), 2)"
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # One-shot versioned pipeline: ingest -> render -> extract.
+  # Requires INGEST_SOURCE and INGEST_DOCUMENT_ID in .env, or pass them:
+  #   docker compose run --rm ingest --source /app/data/knowledge/file.pdf \
+  #     --document-id travel
+  ingest:
+    <<: *app
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    image: innopolis-helper-bot-ingest:local
+    profiles: ["ingest"]
+    restart: "no"
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    entrypoint: ["python", "scripts/docker_pipeline.py"]
+    command:
+      - "--source"
+      - "${INGEST_SOURCE:-}"
+      - "--document-id"
+      - "${INGEST_DOCUMENT_ID:-travel}"
+    volumes:
+      - ./data/knowledge:/app/data/knowledge:ro
+      - ./data/processed:/app/data/processed
+
+  # Optional containerised llama.cpp server. Put GGUF files into ./.models and
+  # set LLM_BASE_URL=http://llama:8080/v1 in .env.
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    profiles: ["llm"]
+    restart: unless-stopped
+    command:
+      - "-m"
+      - "/models/${LLAMA_MODEL_FILE:-model.gguf}"
+      - "--mmproj"
+      - "/models/${LLAMA_MMPROJ_FILE:-mmproj.gguf}"
+      - "--alias"
+      - "${LLM_MODEL:-gemma-4-e2b}"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "-c"
+      - "${LLAMA_CTX:-8192}"
+    volumes:
+      - ./.models:/models:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  postgres_data:

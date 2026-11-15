@@ -212,6 +212,81 @@ If a PDF in `KNOWLEDGE_DIR` has no versioned chunks, it is skipped with a
 warning and remains unavailable to the bot. At least one ready versioned chunk
 set is required for startup.
 
+## Docker Compose
+
+The included Compose stack provides:
+
+- `postgres` — database
+- `bot` — Telegram polling process
+- `viewer` — signed document viewer on loopback
+- `ingest` — one-shot versioned pipeline (`ingest -> render -> extract`)
+- `llama` — optional local llama.cpp server under the `llm` profile
+
+Docker files:
+
+```text
+Dockerfile          # bot/viewer runtime
+Dockerfile.ingest   # ingestion image with Docling and LibreOffice
+docker-compose.yaml
+.dockerignore
+```
+
+Prepare `.env`:
+
+```env
+POSTGRES_PASSWORD=change-me
+INGEST_SOURCE=/app/data/knowledge/БП Командировка.pdf
+INGEST_DOCUMENT_ID=travel
+```
+
+Build and start:
+
+```bash
+docker compose build
+docker compose up -d postgres bot viewer
+```
+
+Run ingestion for one file:
+
+```bash
+docker compose run --rm ingest
+```
+
+Or override the source and document ID:
+
+```bash
+docker compose run --rm ingest \
+  --source /app/data/knowledge/Реестр мебели.pdf \
+  --document-id furniture
+```
+
+The ingestion container writes to `./data/processed`; the bot reads that host
+directory read-only. `./data/knowledge` is also mounted read-only.
+
+If the model endpoint runs on the host, set:
+
+```env
+LLM_BASE_URL=http://host.docker.internal:8081/v1
+```
+
+The optional local llama.cpp profile can be started with:
+
+```bash
+docker compose --profile llm up -d llama
+```
+
+The current Compose file does not include Grafana because the current branch
+does not contain the observability provisioning assets. Office ingestion works
+because `Dockerfile.ingest` installs LibreOffice by default; set
+`--build-arg INSTALL_OFFICE=0` to skip it.
+
+Logs and shutdown:
+
+```bash
+docker compose logs -f bot
+docker compose down
+```
+
 ## 5. Optional document viewer
 
 Set both values in `.env`:
