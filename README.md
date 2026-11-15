@@ -73,7 +73,6 @@ before the bot, workers and admin can use it. The admin container exits until
 | Admin panel | `http://127.0.0.1:8001/admin/` |
 | Document viewer | `http://127.0.0.1:8090` |
 | Grafana | `http://127.0.0.1:3000/d/bot-analytics` |
-| Analytics panel (optional profile) | `http://127.0.0.1:8002/` |
 
 All published ports bind to `127.0.0.1`. Use a reverse proxy for remote access.
 
@@ -89,15 +88,14 @@ All published ports bind to `127.0.0.1`. Use a reverse proxy for remote access.
 | `ticket-worker` | Delivers support tickets; idles without a provider | default |
 | `grafana` | Dashboards | default |
 | `ingest` | One-shot bulk PDF processing | `ingest` |
-| `analytics` | Support analytics panel | `analytics` |
-| `analytics-labeler` | Background question labeler | `analytics` |
+| `analytics-labeler` | Classifies questions for Grafana analytics | `analytics` |
 | `llama` | Optional local llama.cpp server | `llm` |
 
 Services with a profile are not started by plain `docker compose up -d`. Enable
 them explicitly, for example:
 
 ```bash
-docker compose --profile analytics up -d analytics analytics-labeler
+docker compose --profile analytics up -d analytics-labeler
 docker compose --profile ingest run --rm ingest
 ```
 
@@ -371,12 +369,7 @@ Core variables:
 | `JIRA_REQUEST_TYPE_ID` | — | Jira Service Management request type |
 | `USEDESK_CHANNEL_ID` | — | Usedesk channel ID |
 | `TICKET_WEB_BASE_URL` | — | Browser URL prefix for ticket links |
-| `ANALYTICS_USERNAME` | `admin` | Analytics HTTP Basic username |
-| `ANALYTICS_PASSWORD` | — | Analytics HTTP Basic password |
-| `ANALYTICS_AREAS_FILE` | — | Optional product-area mapping |
-| `ANALYTICS_SHOW_EXAMPLES` | `0` | Show anonymized examples |
-| `ANALYTICS_DEMO` | `0` | Generated demo cards without a database |
-| `ANALYTICS_PORT` | `8002` | Analytics host port |
+| `ANALYTICS_AREAS_FILE` | — | Optional product-area mapping for the labeler |
 
 Docker-only values live in `.env` or `storage/admin.env`:
 
@@ -442,17 +435,17 @@ docker compose up -d ticket-worker
 docker compose logs -f ticket-worker
 ```
 
-Support analytics is optional:
-
-```env
-ANALYTICS_PASSWORD=replace-with-a-strong-password
-```
+Support analytics is optional. The background labeler classifies new questions
+for the Grafana dashboards; it does not delay Telegram replies. Run one labeler
+per database:
 
 ```bash
-docker compose --profile analytics up -d analytics analytics-labeler
+docker compose --profile analytics up -d analytics-labeler
+docker compose --profile analytics logs -f analytics-labeler
 ```
 
-See [docs/analytics.md](docs/analytics.md) for provider details, review workflow
+Set `ANALYTICS_AREAS_FILE` to an optional JSON product-area mapping. See
+[docs/analytics.md](docs/analytics.md) for ticket providers, labeling workflow
 and privacy notes.
 
 ## Tests
