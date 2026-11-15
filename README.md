@@ -63,11 +63,11 @@ LLM_SESSION_ID=innopolis-helper-bot
 LLM_USER_AGENT=innopolis-helper-bot/1.0
 ```
 
-The same model settings are used by:
+The same model settings are used by the bot for answer generation and by
+`app.rag.extract` for the normalized vision pipeline.
 
-- the bot for answer generation;
-- `app.ingestion` for diagrams and page fallback;
-- `app.rag.extract` for the normalized vision pipeline.
+The examples use POSIX environment paths (`.venv/bin/python`). On Windows use
+`.venv\Scripts\python.exe` with the same arguments.
 
 The model must support **image input** for document extraction. A text-only
 model can answer questions from existing chunks but cannot process new PDFs or
@@ -87,8 +87,7 @@ images.
 | `TEMPERATURE` | `0.1` | Answer generation temperature |
 | `TOP_K` | `6` | Number of chunks passed to the LLM |
 | `MIN_SCORE` | `0` | Minimum BM25 score |
-| `KNOWLEDGE_DIR` | `data/knowledge` | Source PDF directory for the legacy flat pipeline |
-| `CHUNKS_DIR` | `data/processed` | Legacy flat chunk directory |
+| `KNOWLEDGE_DIR` | `data/knowledge` | Source PDF directory used for ingest and startup checks |
 | `DOCUMENTS_DIR` | `data/processed/documents` | Versioned `app/rag` store |
 | `DATABASE_PATH` | `data/bot.sqlite3` | SQLite path |
 | `DATABASE_URL` | — | Optional PostgreSQL URL |
@@ -101,11 +100,10 @@ for generic OpenAI-compatible providers.
 
 ## 3. Prepare documentation
 
-There are two supported workflows. The versioned `app/rag` workflow is
-recommended; the flat `app.ingestion` workflow remains for migration and simple
-PDF-only deployments.
+The project uses one document workflow: every source is stored as an immutable
+version, rendered when needed, and extracted into versioned chunks.
 
-### Recommended: versioned pipeline
+### Pipeline
 
 ```bash
 # 1. Store an immutable version
@@ -138,29 +136,6 @@ The console scripts are also available after `pip install -e .`:
 .venv/bin/rag-extract ...
 ```
 
-### Legacy: flat PDF chunks
-
-```bash
-.venv/bin/python -m app.ingestion
-```
-
-Process one PDF or selected pages:
-
-```bash
-.venv/bin/python -m app.ingestion "data/knowledge/Реестр мебели.pdf"
-.venv/bin/python -m app.ingestion "data/knowledge/БП Командировка.pdf" --pages 4,7-9
-```
-
-This writes:
-
-```text
-data/processed/<pdf-stem>.chunks.jsonl
-data/processed/<pdf-stem>.chunks.md
-```
-
-The bot prefers versioned chunks and automatically fills in flat chunks for
-documents that have not been migrated yet.
-
 ### Debug a single version
 
 ```bash
@@ -180,12 +155,13 @@ Debug extracts have `status: partial` and are ignored by the bot.
 Startup checks:
 
 1. Telegram token is present.
-2. Chunks exist.
-3. Every PDF in `KNOWLEDGE_DIR` has either versioned or flat chunks.
-4. SQLite/PostgreSQL migrations are applied.
-5. The LLM client is created.
+2. Versioned chunks exist.
+3. SQLite/PostgreSQL migrations are applied.
+4. The LLM client is created.
 
-The bot refuses to start if a document is missing from the chunk store.
+If a PDF in `KNOWLEDGE_DIR` has no versioned chunks, it is skipped with a
+warning and remains unavailable to the bot. At least one ready versioned chunk
+set is required for startup.
 
 ## 5. Optional document viewer
 
@@ -211,15 +187,14 @@ artifacts is a future improvement.
 ```text
 data/knowledge/*.pdf
         │
-        ├── legacy ── app.ingestion ── data/processed/*.chunks.jsonl
+        ▼
+app.rag.ingest
         │
-        └── versioned ── app.rag.ingest
-                              │
-                              ├── app.rag.render
-                              │     └── pages/frames/HTML previews
-                              │
-                              └── app.rag.extract
-                                    └── versioned chunks
+        ├── app.rag.render
+        │     └── pages/frames/HTML previews
+        │
+        └── app.rag.extract
+              └── versioned chunks
         │
         ▼
 app.rag.index (BM25)
@@ -239,9 +214,9 @@ SQLite/PostgreSQL
 1. Docling extracts text, headings, lists, tables and picture regions.
 2. Running headers/footers and picture-OCR noise are removed.
 3. Pictures and unreadable pages are sent to the multimodal model with
-   `app/ingestion/prompts/image_analysis.j2`.
+   `app/rag/extraction/prompts/image_analysis.j2`.
 4. Analysis items become normalized elements with source references.
-5. `app/ingestion/prompts/vision_chunker.j2` groups those references.
+5. `app/rag/extraction/prompts/vision_chunker.j2` groups those references.
 6. The application resolves references back to text and structured data.
 7. The model never copies source text into the final chunk; it only groups
    references, so malformed model output cannot silently rewrite facts.
@@ -329,15 +304,9 @@ stay in chunk metadata.
 
 Install LibreOffice, for example:
 
-```bash
-# macOS
-brew install --cask libreoffice
-
-# Ubuntu/Debian
-sudo apt install libreoffice
-```
-
-Set `SOFFICE_PATH` if `soffice` is not on `PATH`.
+Install LibreOffice through your system package manager so that `soffice` is
+available on `PATH`. If it is installed elsewhere, set `SOFFICE_PATH` or pass
+`--soffice`.
 
 ## Tests
 
@@ -361,18 +330,23 @@ Create `.env` from `.env.example` and put the token from @BotFather into
 
 ### `Чанки не найдены`
 
-Run one of:
+Run the versioned pipeline:
 
 ```bash
-.venv/bin/python -m app.ingestion
-# or the full versioned pipeline:
+.venv/bin/python -m app.rag.ingest "<source>" --document-id <id>
+.venv/bin/python -m app.rag.render --all
 .venv/bin/python -m app.rag.extract --all
 ```
 
 ### `Не обработаны PDF: ...`
 
-A PDF in `data/knowledge/` has no matching chunks. Run the legacy ingestion or
-migrate it through `app.rag.ingest` → `render` → `extract`.
+A PDF in `data/knowledge/` has no versioned chunks. Run:
+
+```bash
+.venv/bin/python -m app.rag.ingest "data/knowledge/<file>.pdf" --document-id <id>
+.venv/bin/python -m app.rag.render --all
+.venv/bin/python -m app.rag.extract --all
+```
 
 ### `Extraction is locked`
 

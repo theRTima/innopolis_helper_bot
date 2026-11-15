@@ -53,4 +53,4 @@ testpaths = ["tests"]
 include = ["app*"]
 
 [tool.setuptools.package-data]
-"app.ingestion" = ["prompts/*", "prompts/legacy/*"]
+"app.rag.extraction" = ["prompts/*"]

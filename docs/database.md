@@ -1,8 +1,8 @@
 # Bot database
 
 The database stores bot activity, not the document search index. The index is
-built from offline-generated JSONL files in `CHUNKS_DIR`; parsing and chunk
-metadata do not require a database.
+built from versioned JSONL chunks in `DOCUMENTS_DIR`; parsing and chunk metadata
+do not require a database.
 
 By default, the bot uses asynchronous SQLite at `data/bot.sqlite3`, overridden
 by `DATABASE_PATH`. PostgreSQL remains available through `DATABASE_URL`. Alembic
