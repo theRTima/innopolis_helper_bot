@@ -110,10 +110,23 @@ async def test_source_button_reveals_links_and_keeps_other_buttons(tmp_path, mon
         await handle_sources(callback, db, settings)
 
         rows = edit.call_args.kwargs["reply_markup"].inline_keyboard
-        assert rows[0][0].url.startswith("https://docs.example/")
-        assert rows[1][0].url == support[1]
-        assert rows[2][0].callback_data == f"resolution:resolved:{question_id}"
+        assert rows[0][0].callback_data == f"sources:hide:{question_id}"
+        assert rows[1][0].url.startswith("https://docs.example/")
+        assert rows[2][0].url == support[1]
+        assert rows[3][0].callback_data == f"resolution:resolved:{question_id}"
         callback.answer.assert_awaited_once_with()
+
+        callback.data = f"sources:hide:{question_id}"
+        callback.message = message.model_copy(update={
+            "reply_markup": edit.call_args.kwargs["reply_markup"],
+        })
+        await handle_sources(callback, db, settings)
+
+        hidden_rows = edit.call_args.kwargs["reply_markup"].inline_keyboard
+        assert hidden_rows[0][0].callback_data == f"sources:{question_id}"
+        assert hidden_rows[1][0].url == support[1]
+        assert hidden_rows[2][0].callback_data == f"resolution:resolved:{question_id}"
+        assert len(hidden_rows) == 3
     finally:
         await db.close()
 

@@ -427,9 +427,10 @@ async def handle_sources(
 ) -> None:
     try:
         parts = (callback.data or "").split(":")
-        if len(parts) != 2:
+        hiding = len(parts) == 3 and parts[1] == "hide"
+        if not (len(parts) == 2 or hiding):
             raise ValueError("Invalid source callback")
-        question_id = int(parts[1])
+        question_id = int(parts[-1])
         context = await db.get_question_context(
             question_id=question_id, telegram_id=callback.from_user.id
         )
@@ -440,23 +441,38 @@ async def handle_sources(
     if not isinstance(message, Message) or message.reply_markup is None:
         await callback.answer("Источники этого ответа недоступны.", show_alert=True)
         return
-    links = _source_links(context["sources"], settings)
-    if not links:
+    links = _source_links(context["sources"], settings) if not hiding else []
+    if not hiding and not links:
         await callback.answer("Ссылки на источники недоступны.", show_alert=True)
         return
     rows = []
     replaced = False
     for row in message.reply_markup.inline_keyboard:
+        if hiding and all(
+            button.url and button.text.startswith("Открыть источник [")
+            for button in row
+        ):
+            continue
         if any(button.callback_data == callback.data for button in row):
-            rows.extend([
-                [InlineKeyboardButton(text=label, url=url)]
-                for label, url in links
-            ])
+            if hiding:
+                rows.append([InlineKeyboardButton(
+                    text="Показать источники",
+                    callback_data=f"sources:{question_id}",
+                )])
+            else:
+                rows.append([InlineKeyboardButton(
+                    text="Скрыть источники",
+                    callback_data=f"sources:hide:{question_id}",
+                )])
+                rows.extend([
+                    [InlineKeyboardButton(text=label, url=url)]
+                    for label, url in links
+                ])
             replaced = True
         else:
             rows.append(row)
     if not replaced:
-        await callback.answer("Источники уже показаны.")
+        await callback.answer("Кнопка уже обновлена.")
         return
     try:
         await message.edit_reply_markup(
