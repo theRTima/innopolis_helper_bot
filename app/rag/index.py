@@ -32,6 +32,8 @@ class Chunk:
     data: dict | None = None
     locator: dict | None = None
     chunk_file: str = field(default="", compare=False)
+    asset_ids: tuple[str, ...] = field(default=(), compare=False)
+    assets: tuple[dict, ...] = field(default=(), compare=False)
 
     @property
     def page_label(self) -> str:
@@ -91,6 +93,16 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
                     page_to=page_to,
                     text=text.strip(),
                     chunk_file=str(chunks_path.resolve()),
+                    asset_ids=tuple(
+                        value
+                        for value in item.get("asset_ids", [])
+                        if isinstance(value, str)
+                    ),
+                    assets=tuple(
+                        value
+                        for value in item.get("assets", [])
+                        if isinstance(value, dict)
+                    ),
                     document_id=item.get("document_id"),
                     version_id=item.get("version_id"),
                     title=str(item.get("title") or ""),
