@@ -17,9 +17,11 @@ from fastapi_amis_admin.admin.extensions.admin import ReadOnlyModelAdmin
 from fastapi_amis_admin.admin.settings import Settings
 from fastapi_amis_admin.admin.site import AdminSite, FileAdmin
 from fastapi_amis_admin.amis.components import ActionType
+from fastapi_amis_admin.crud.utils import AsyncDatabase
 from fastapi_amis_admin.utils.translation import i18n
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.admin.access import register_access_admins, register_access_routes
 from app.admin.documents import register_document_routes
@@ -56,6 +58,7 @@ def create_app() -> FastAPI:
     i18n.set_language("en_US")
     access_engine = create_async_engine(access_database_url, pool_pre_ping=True)
     access_sessions = async_sessionmaker(access_engine, expire_on_commit=False)
+    access_db = AsyncDatabase(access_engine, expire_on_commit=False)
     register_access_routes(
         app,
         sessions=access_sessions,
@@ -198,7 +201,8 @@ button:hover{background:#244ce0}.foot{margin-top:21px;color:var(--muted);font-si
         model = User
         list_display = [User.id, User.telegram_id, User.created_at]
 
-    register_access_admins(site, access_engine)
+    register_access_admins(site, access_db)
 
     site.mount_app(app)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=access_db.asgi_dispatch)
     return app

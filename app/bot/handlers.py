@@ -17,6 +17,12 @@ from app.bot.keyboards import feedback_keyboard
 from app.bot.input_filter import GibberishMute, RateLimiter, SpamCooldown, valid_question
 from app.config import Settings
 from app.llm.client import LLMClient
+from app.llm.guardrails import (
+    INVALID_ANSWER,
+    NO_EVIDENCE,
+    SCOPE_REFUSAL,
+    blocked_request,
+)
 from app.rag.index import Chunk, SearchIndex
 from app.rag.retrieve import retrieve_context
 from app.storage.db import Database
@@ -162,9 +168,11 @@ async def handle_question(
     except Exception:
         logger.warning("Unable to send typing indicator", exc_info=True)
     search_error = False
+    scope_blocked = blocked_request(question)
     try:
-        await asyncio.to_thread(index.refresh)
-        results = retrieve_context(
+        if index is not None:
+            await asyncio.to_thread(index.refresh)
+        results = [] if scope_blocked else retrieve_context(
             index, question, top_k=settings.top_k, min_score=settings.min_score,
         )
     except Exception:
@@ -173,10 +181,17 @@ async def handle_question(
         search_error = True
 
     status = "no_evidence"
-    if results:
+    if scope_blocked:
+        answer = SCOPE_REFUSAL
+        status = "unverified"
+    elif results:
         try:
             answer = await llm.answer_question(question, results)
             status = "unverified"
+            if answer == NO_EVIDENCE:
+                status = "no_evidence"
+            elif answer == INVALID_ANSWER:
+                status = "error"
         except Exception:
             logger.exception("LLM request failed")
             answer = LLM_ERROR_MESSAGE

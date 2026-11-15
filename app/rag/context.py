@@ -1,4 +1,4 @@
-"""Shared, offline-testable rendering of the actual LLM text context."""
+"""Human-readable retrieval diagnostics with stable source numbering."""
 
 from app.rag.index import Chunk
 

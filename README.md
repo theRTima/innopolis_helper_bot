@@ -15,7 +15,8 @@ BM25 retrieval supplies evidence to an OpenAI-compatible answer model.
 | `viewer` | Signed document viewer | `http://127.0.0.1:8090` |
 | `grafana` | Analytics dashboards | `http://127.0.0.1:3000/d/bot-analytics` |
 | `ingest` | One-shot PDF processing; not a long-running service | — |
-| `admin` | Optional read-only admin panel | `http://127.0.0.1:8001/admin/` |
+| `admin` | Admin panel: read-only views, allowlist/invites, document uploads | `http://127.0.0.1:8001/admin/` |
+| `document-worker` | Background processing for admin document uploads | — |
 | `llama` | Optional local llama.cpp server | `http://127.0.0.1:8080` |
 
 Published ports bind to `127.0.0.1` only, so the stack is not exposed to the
@@ -44,7 +45,13 @@ LLM_API_KEY=your-api-key
 POSTGRES_PASSWORD=replace-with-a-strong-password
 GRAFANA_ADMIN_PASSWORD=replace-with-another-password
 GRAFANA_DB_PASSWORD=replace-with-a-reader-password
+DOCUMENTS_BASE_URL=http://127.0.0.1:8090
+DOCUMENT_LINK_SECRET=replace-with-a-long-random-secret
 ```
+
+`DOCUMENTS_BASE_URL` and `DOCUMENT_LINK_SECRET` enable signed source links in
+bot answers. Both must be set together. For Telegram users on other devices,
+use a publicly reachable HTTPS viewer URL, normally through a reverse proxy.
 
 `TELEGRAM_ALLOWED_USERNAMES` is required for access. An empty list denies
 everyone. Use Telegram usernames, not display names.
@@ -62,7 +69,7 @@ keep their current IDs.
 **4. Build the images.**
 
 ```bash
-docker compose --profile ingest build bot viewer ingest
+docker compose --profile ingest build
 ```
 
 The ingestion image installs CPU-only PyTorch and LibreOffice, so the first
@@ -93,13 +100,23 @@ docker compose run --rm --no-deps bot python scripts/setup_grafana_reader.py
 
 This creates the aggregate views and the read-only `grafana_reader` role.
 
-**8. Start the long-running services.**
+**8. Prepare the admin panel.**
+
+The admin container starts with the rest of the stack and needs
+`storage/admin.env`. Follow “Run the administration panel in Docker” below to
+create the read-only database role and that file before starting the stack. If
+the file is missing, the admin container exits but the remaining services still
+start.
+
+**9. Start the long-running services.**
 
 ```bash
-docker compose up -d bot viewer grafana
+docker compose up -d
 ```
 
-**9. Verify the launch.**
+This starts PostgreSQL, bot, viewer, Grafana and admin.
+
+**10. Verify the launch.**
 
 ```bash
 docker compose ps
@@ -116,6 +133,7 @@ Open:
 
 - Grafana: `http://localhost:3000/d/bot-analytics`
 - Viewer: `http://localhost:8090`
+- Admin: `http://127.0.0.1:8001/admin/`
 
 Log in to Grafana as `admin` with `GRAFANA_ADMIN_PASSWORD` from `.env`.
 
@@ -525,17 +543,46 @@ ADMIN_PASSWORD=CHOOSE_A_STRONG_PASSWORD
 Replace the example passwords and restrict the file to its owner, for example
 with `chmod 600 storage/admin.env`. Docker Compose points this URL at the
 `postgres` service inside its network; the same file also works for the local
-preview. Build and start the optional service:
+preview.
+
+Create both roles through the bot image, using the same passwords as in
+`storage/admin.env`:
 
 ```bash
-docker compose --profile admin up -d --build admin
-docker compose --profile admin logs -f admin
-docker compose --profile admin stop admin
+docker compose run --rm --no-deps \
+  -e ADMIN_READER_PASSWORD='READER_PASSWORD' \
+  bot python scripts/setup_admin_reader.py
+
+docker compose run --rm --no-deps \
+  -e ADMIN_ACCESS_DATABASE_URL='postgresql+asyncpg://bot_admin_access:ACCESS_PASSWORD@127.0.0.1:5438/bot' \
+  bot python scripts/setup_admin_access.py
 ```
+
+The admin service starts with the normal stack. Build and control it with:
+
+```bash
+docker compose up -d --build admin
+docker compose logs -f admin
+docker compose stop admin
+docker compose start admin
+```
+
+If `storage/admin.env` is missing, only the admin container fails; the other
+services continue to run.
 
 The address remains `http://127.0.0.1:8001/admin/`; `ADMIN_PORT` can change the
 host port. Stop any local uvicorn process already using this port first. A
 missing or incorrect reader password prevents the panel from accessing data.
+
+## Documentation-only answers
+
+The bot refuses common instruction overrides and unrelated writing/coding
+requests before calling the model. Questions and source text are treated as
+untrusted data. Model output must follow a fixed response schema and cite valid
+source IDs; malformed or uncited output is replaced with a fixed response.
+These controls reduce prompt-injection risk but do not guarantee semantic
+grounding or resistance to every jailbreak. See
+[the security notes](docs/prompt-injection.md) for controls and limitations.
 
 ## Retrieval
 
