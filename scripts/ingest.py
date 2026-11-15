@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import sys
+from time import perf_counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,8 @@ from app.config import Settings
 from app.ingest.service import import_document
 from app.ingest.light import parse_document as parse_light
 from app.storage.db import Database
-from app.ingestion.docling_parser import parse_document
+from app.ingestion import vision_parser as vision
+from app.storage.models import ImportRun
 
 
 def is_current(pdf: Path) -> bool:
@@ -50,25 +52,48 @@ async def import_pdfs(settings: Settings, documents: list[Path], args: argparse.
     await database.init()
     try:
         for pdf in documents:
+            total_started = perf_counter()
+            before = vision.metrics_snapshot()
+            stats: dict[str, int] = {}
             pdf = pdf.resolve()
             if not pdf.is_file():
                 raise FileNotFoundError(pdf)
 
-            if not args.force and is_current(pdf):
+            if not args.force and args.parser == "auto" and is_current(pdf):
                 chunks = load_cached_chunks(pdf)
                 print(f"Использую готовый результат парсинга: {pdf.name}")
             else:
-                parser = parse_light if args.parser == "light" else parse_document
-                chunks = parser(pdf, out_dir=pdf.parent)
+                if args.parser == "light":
+                    chunks = parse_light(pdf, out_dir=pdf.parent, text_only=args.text_only, stats=stats)
+                else:
+                    from app.ingestion.docling_parser import parse_document
+                    chunks = parse_document(pdf, out_dir=pdf.parent)
 
+            parse_ms = round((perf_counter() - total_started) * 1000)
+            after = vision.metrics_snapshot()
             async with database.session() as session:
                 async with session.begin():
                     version, imported = await import_document(session, pdf, chunks)
+                    session.add(ImportRun(
+                        document_id=version.document_id,
+                        document_version_id=version.id,
+                        parser=args.parser,
+                        imported=imported,
+                        chunk_count=len(chunks),
+                        model_calls=after["model_calls"] - before["model_calls"],
+                        cache_hits=after["cache_hits"] - before["cache_hits"],
+                        parse_ms=parse_ms,
+                        text_ms=stats.get("text_ms", 0),
+                        vision_ms=after["vision_ms"] - before["vision_ms"],
+                        total_ms=round((perf_counter() - total_started) * 1000),
+                    ))
 
             result = "импортирована" if imported else "без изменений"
             print(
                 f"{pdf.name}: {result}; версия {version.version}, "
-                f"чанков {len(chunks)}"
+                f"чанков {len(chunks)}; парсинг {parse_ms} мс; "
+                f"модель {after['model_calls'] - before['model_calls']} запросов, "
+                f"кэш {after['cache_hits'] - before['cache_hits']} попаданий"
             )
     finally:
         await database.close()
@@ -80,7 +105,10 @@ def main() -> None:
     parser.add_argument("pdf", nargs="?", type=Path, help="PDF; по умолчанию все из KNOWLEDGE_DIR")
     parser.add_argument("--parser", choices=("auto", "docling", "light"), default="auto")
     parser.add_argument("--force", action="store_true", help="повторно обработать документы")
+    parser.add_argument("--text-only", action="store_true", help="пропустить картинки в light parser")
     args = parser.parse_args()
+    if args.text_only and args.parser != "light":
+        parser.error("--text-only requires --parser light")
 
     documents = [args.pdf] if args.pdf else sorted(settings.knowledge_dir.glob("*.pdf"))
     if not documents:

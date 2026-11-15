@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from time import perf_counter
 from pathlib import Path
 
 from app.config import Settings
 from app.ingestion.docling_parser import parse_document
 from app.ingest.service import import_document
 from app.storage.db import Database
+from app.storage.models import ImportRun
+from app.ingestion import vision_parser as vision
 
 
 async def parse_and_import(settings: Settings, args: argparse.Namespace, pdfs: list[Path]) -> None:
@@ -17,8 +20,12 @@ async def parse_and_import(settings: Settings, args: argparse.Namespace, pdfs: l
     await database.init()
     try:
         for pdf_path in pdfs:
+            started = perf_counter()
+            before = vision.metrics_snapshot()
             print(f"Parsing {pdf_path.name}")
             chunks = parse_document(pdf_path, out_dir=args.out_dir, pages_spec=args.pages)
+            parse_ms = round((perf_counter() - started) * 1000)
+            after = vision.metrics_snapshot()
             if args.pages is not None:
                 print("Partial page selection was written to files; database was not changed.")
                 continue
@@ -26,8 +33,22 @@ async def parse_and_import(settings: Settings, args: argparse.Namespace, pdfs: l
             async with database.session() as session:
                 async with session.begin():
                     version, imported = await import_document(session, pdf_path, chunks)
+                    session.add(ImportRun(
+                        document_id=version.document_id,
+                        document_version_id=version.id,
+                        parser="docling",
+                        imported=imported,
+                        chunk_count=len(chunks),
+                        model_calls=after["model_calls"] - before["model_calls"],
+                        cache_hits=after["cache_hits"] - before["cache_hits"],
+                        parse_ms=parse_ms,
+                        vision_ms=after["vision_ms"] - before["vision_ms"],
+                        total_ms=round((perf_counter() - started) * 1000),
+                    ))
             result = "imported" if imported else "unchanged"
-            print(f"Database: {result}; version {version.version}, chunks {len(chunks)}")
+            print(f"Database: {result}; version {version.version}, chunks {len(chunks)}; "
+                  f"parse {parse_ms} ms, model calls {after['model_calls'] - before['model_calls']}, "
+                  f"cache hits {after['cache_hits'] - before['cache_hits']}")
     finally:
         await database.close()
 

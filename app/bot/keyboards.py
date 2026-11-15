@@ -44,9 +44,12 @@ def with_support_button(
     markup: InlineKeyboardMarkup | None,
     support_url: str,
     text: str = "Написать специалисту",
+    question_id: int | None = None,
 ) -> InlineKeyboardMarkup:
-    """Append a URL button that opens the specialist's chat."""
+    """Append a tracked callback when a question ID is available."""
 
     rows = [list(row) for row in markup.inline_keyboard] if markup else []
-    rows.append([InlineKeyboardButton(text=text, url=support_url)])
+    button = (InlineKeyboardButton(text=text, callback_data=f"support:{question_id}")
+              if question_id is not None else InlineKeyboardButton(text=text, url=support_url))
+    rows.append([button])
     return InlineKeyboardMarkup(inline_keyboard=rows)

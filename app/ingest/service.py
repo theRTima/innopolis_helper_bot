@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 from sqlalchemy import func, select
@@ -37,6 +38,9 @@ async def import_document(
         raise ValueError(f"Парсер не вернул чанки для {file_path.name}; импорт отменён")
 
     checksum = calculate_sha256(file_path)
+    chunks_checksum = hashlib.sha256(
+        json.dumps(chunks_data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     slug = file_path.stem
     document = await session.scalar(select(Document).where(Document.slug == slug))
     if document is None:
@@ -55,7 +59,11 @@ async def import_document(
                 DocumentVersion.version == document.active_version,
             )
         )
-        if active is not None and active.checksum_sha256 == checksum:
+        if (
+            active is not None
+            and active.checksum_sha256 == checksum
+            and active.chunks_sha256 == chunks_checksum
+        ):
             return active, False
 
     latest_version = await session.scalar(
@@ -67,6 +75,7 @@ async def import_document(
         document_id=document.id,
         version=(latest_version or 0) + 1,
         checksum_sha256=checksum,
+        chunks_sha256=chunks_checksum,
         storage_path=str(file_path),
     )
     session.add(version)

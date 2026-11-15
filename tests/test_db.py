@@ -1,6 +1,34 @@
 from app.storage.db import Database
-from app.storage.models import Answer, Conversation, Feedback, Message, Question, User
+from app.storage.models import Analitics, Answer, Conversation, Feedback, Message, Question, User
 from sqlalchemy import select
+
+
+async def test_question_status_and_operator_share_question_id(tmp_path) -> None:
+    database = Database(tmp_path / "analytics.db")
+    await database.init()
+    try:
+        question_id = await database.save_question(
+            telegram_id=42, chat_id=42, question="Где инструкция?"
+        )
+        async with database.session() as session:
+            question = await session.get(Question, question_id)
+            analytics = await session.scalar(select(Analitics).where(Analitics.question_id == question_id))
+            assert question is not None and question.answer == ""
+            assert analytics is not None and analytics.answer_status is None
+
+        await database.save_answer(
+            question_id=question_id, answer="Документ не найден", sources=[], status="no_evidence"
+        )
+        await database.save_operator_status(question_id=question_id, telegram_id=42, status="requested")
+        await database.save_operator_status(question_id=question_id, telegram_id=42, status="delivered")
+        async with database.session() as session:
+            answer = await session.scalar(select(Answer).where(Answer.question_id == question_id))
+            analytics = await session.scalar(select(Analitics).where(Analitics.question_id == question_id))
+            assert answer is not None and answer.status == "no_evidence"
+            assert analytics is not None and analytics.answer_status == "no_evidence"
+            assert analytics.operator_status == "delivered"
+    finally:
+        await database.close()
 
 
 async def test_save_question_and_feedback(tmp_path) -> None:

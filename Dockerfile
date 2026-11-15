@@ -6,9 +6,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY requirements-ingestion.txt .
+COPY requirements.txt requirements-ingestion.txt ./
 
-RUN pip install -r requirements-ingestion.txt
+RUN pip install -r requirements.txt
 
 
 RUN useradd --create-home --uid 1000 app

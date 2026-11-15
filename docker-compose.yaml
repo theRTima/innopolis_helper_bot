@@ -6,8 +6,8 @@ x-app: &app
   environment:
     DATABASE_URL: postgresql+asyncpg://bot:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/bot
     KNOWLEDGE_DIR: /app/data/knowledge
-    LLM_BASE_URL: ${DOCKER_LLM_BASE_URL:-http://host.docker.internal:8081/v1}
-    VISION_BASE_URL: ${DOCKER_LLM_BASE_URL:-http://host.docker.internal:8081/v1}
+    LLM_BASE_URL: ${DOCKER_LLM_BASE_URL:-${LLM_BASE_URL:-http://host.docker.internal:8081/v1}}
+    VISION_BASE_URL: ${DOCKER_LLM_BASE_URL:-${LLM_BASE_URL:-http://host.docker.internal:8081/v1}}
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
@@ -55,6 +55,10 @@ services:
   # Offline chunk preparation: writes *.chunks.jsonl next to the PDFs.
   ingest:
     <<: *app
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    image: innopolis-helper-bot-ingest:local
     profiles: ["ingest"]
     restart: "no"
     # Files are written into the bind mount with the host user's ids.

@@ -94,30 +94,40 @@ async def handle_question(
     settings: Settings,
 ) -> None:
     question = (message.text or "").strip()
-    if len(question) < 2:
-        await message.answer("Напишите вопрос текстом, пожалуйста.")
-        return
     if message.from_user is None:
         return
 
-    await message.bot.send_chat_action(
-        chat_id=message.chat.id,
-        action=ChatAction.TYPING,
-    )
-    results = index.search(
-        question,
-        top_k=settings.top_k,
-        min_score=settings.min_score,
-    )
+    try:
+        question_id = await db.save_question(
+            telegram_id=message.from_user.id,
+            chat_id=message.chat.id,
+            question=question,
+        )
+    except Exception:
+        logger.exception("Failed to save incoming question")
+        await message.answer("Не удалось сохранить вопрос. Попробуйте ещё раз позже.")
+        return
 
-    if results:
-        try:
+    if len(question) < 2:
+        answer = "Напишите вопрос текстом, пожалуйста."
+        await db.save_answer(question_id=question_id, answer=answer, sources=[], status="no_evidence")
+        await message.answer(answer)
+        return
+
+    results: list[tuple[float, Chunk]] = []
+    status = "error"
+    try:
+        await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+        results = index.search(question, top_k=settings.top_k, min_score=settings.min_score)
+        if results:
             answer = await llm.answer_question(question, results)
-        except Exception:
-            logger.exception("LLM request failed")
-            answer = LLM_ERROR_MESSAGE
-    else:
-        answer = NO_RESULTS_MESSAGE
+            status = "unverified"
+        else:
+            answer = NO_RESULTS_MESSAGE
+            status = "no_evidence"
+    except Exception:
+        logger.exception("Question processing failed")
+        answer = LLM_ERROR_MESSAGE
 
     cited = {int(number) for number in re.findall(r"\[(\d+)\]", answer)}
     cited &= set(range(1, len(results) + 1))
@@ -131,17 +141,17 @@ async def handle_question(
         if position in cited
     ]
 
-    question_id: int | None = None
+    if status == "unverified" and cited:
+        status = "with_sources"
     try:
-        question_id = await db.save_question(
-            telegram_id=message.from_user.id,
-            chat_id=message.chat.id,
-            question=question,
+        await db.save_answer(
+            question_id=question_id,
             answer=answer,
             sources=sources,
+            status=status,
         )
     except Exception:
-        logger.exception("Failed to save question")
+        logger.exception("Failed to save answer for question_id=%s", question_id)
 
     reply = _truncate(answer) + _format_sources(results, cited)
     source_links: list[tuple[str, str]] = []
@@ -212,10 +222,45 @@ async def handle_feedback(callback: CallbackQuery, db: Database, settings: Setti
                 and not_helpful_count >= settings.support_escalation_threshold
                 and settings.support_url
             ):
-                markup = with_support_button(markup, settings.support_url)
+                markup = with_support_button(markup, settings.support_url, question_id=question_id)
             await callback.message.edit_reply_markup(reply_markup=markup)
         except Exception:
             logger.debug("Could not remove feedback keyboard", exc_info=True)
+
+
+@router.callback_query(F.data.startswith("support:"))
+async def handle_support(callback: CallbackQuery, db: Database, settings: Settings) -> None:
+    try:
+        question_id = int((callback.data or "").split(":", 1)[1])
+        await db.save_operator_status(
+            question_id=question_id, telegram_id=callback.from_user.id, status="requested"
+        )
+    except (ValueError, IndexError):
+        await callback.answer("Вопрос не найден.")
+        return
+    except Exception:
+        logger.exception("Failed to record operator request")
+        await callback.answer("Не удалось передать запрос специалисту.")
+        return
+
+    try:
+        if not settings.support_url or not isinstance(callback.message, Message):
+            raise ValueError("Ссылка на специалиста не настроена")
+        await callback.message.answer(
+            f"Написать специалисту по вопросу №{question_id}: {settings.support_url}"
+        )
+    except Exception:
+        logger.exception("Failed to deliver operator link for question_id=%s", question_id)
+        await db.save_operator_status(
+            question_id=question_id, telegram_id=callback.from_user.id, status="failed"
+        )
+        await callback.answer("Не удалось отправить ссылку специалиста.")
+        return
+
+    await db.save_operator_status(
+        question_id=question_id, telegram_id=callback.from_user.id, status="delivered"
+    )
+    await callback.answer("Ссылка отправлена.")
 
 
 @router.message(F.text.startswith("/"))

@@ -11,7 +11,11 @@ import argparse
 import base64
 import json
 import mimetypes
+import hashlib
+import os
 import re
+import time
+import uuid
 from pathlib import Path
 
 import pymupdf
@@ -28,6 +32,8 @@ SETTINGS = Settings.from_env()
 MODEL_ID = SETTINGS.llm_model
 DPI = 200
 MAX_TOKENS = 8192
+VISION_CACHE_DIR = PROJECT_DIR / "data" / "cache" / "vision"
+_metrics = {"model_calls": 0, "cache_hits": 0, "vision_ms": 0}
 
 # An embedded image is treated as document content if it covers this share of
 # the page. Small logos/icons are ignored.
@@ -59,6 +65,8 @@ def get_client() -> OpenAI:
         _client = OpenAI(
             base_url=SETTINGS.llm_base_url,
             api_key=SETTINGS.llm_api_key,
+            timeout=90,
+            max_retries=2,
             default_headers={
                 "x-opencode-session": SETTINGS.llm_session_id,
                 "User-Agent": SETTINGS.llm_user_agent,
@@ -89,8 +97,19 @@ def run_text(prompt: str) -> str:
 def run_vision(prompt: str, image_path) -> str:
     path = Path(image_path)
     mime = mimetypes.guess_type(path.name)[0] or "image/png"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return _chat_text(
+    image_bytes = path.read_bytes()
+    key = hashlib.sha256(
+        b"vision-v1\0" + SETTINGS.llm_base_url.encode() + b"\0"
+        + MODEL_ID.encode() + b"\0" + prompt.encode() + b"\0" + image_bytes
+    ).hexdigest()
+    cache_path = VISION_CACHE_DIR / f"{key}.txt"
+    if cache_path.is_file():
+        _metrics["cache_hits"] += 1
+        return cache_path.read_text(encoding="utf-8")
+    encoded = base64.b64encode(image_bytes).decode("ascii")
+    started = time.perf_counter()
+    _metrics["model_calls"] += 1
+    raw = _chat_text(
         [
             {
                 "role": "user",
@@ -106,6 +125,17 @@ def run_vision(prompt: str, image_path) -> str:
             }
         ]
     )
+    _metrics["vision_ms"] += round((time.perf_counter() - started) * 1000)
+    if raw and parse_json_object(raw):
+        VISION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        temporary = cache_path.with_name(f"{key}.{uuid.uuid4().hex}.tmp")
+        temporary.write_text(raw, encoding="utf-8")
+        os.replace(temporary, cache_path)
+    return raw
+
+
+def metrics_snapshot() -> dict[str, int]:
+    return _metrics.copy()
 
 
 def parse_json_object(raw):
@@ -189,17 +219,9 @@ def coverage_ratio(chunks, reference):
 def extract_chunks(
     image_path, pdf_name, page_number, mode, start_index, page_text="", retry_note=""
 ):
-    analysis = None
-    if mode == "image":
-        # Diagram labels and branches are easy to lose in a single pass, so
-        # first extract a detailed structured description, then chunk it.
-        analysis = parse_json_object(run_vision(analysis_prompt.render(), image_path))
-
     prompt = chunker_prompt.render(
         mode=mode,
-        analysis=(
-            json.dumps(analysis, ensure_ascii=False, indent=2) if analysis else ""
-        ),
+        analysis="",
         page_text=page_text,
         retry_note=retry_note,
     )

@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from app.storage.models import Answer, Conversation, Feedback, Message, Question, User
+from app.storage.models import Analitics, Answer, Conversation, Feedback, Message, Question, User
 
 
 class Database:
@@ -68,15 +68,16 @@ class Database:
         telegram_id: int,
         chat_id: int,
         question: str,
-        answer: str,
-        sources: list[dict[str, object]],
+        answer: str | None = None,
+        sources: list[dict[str, object]] | None = None,
+        status: str | None = None,
     ) -> int:
         row = Question(
             telegram_id=telegram_id,
             chat_id=chat_id,
             question=question,
-            answer=answer,
-            sources=json.dumps(sources, ensure_ascii=False),
+            answer="",
+            sources="[]",
         )
         async with self.session() as session:
             async with session.begin():
@@ -101,15 +102,63 @@ class Database:
                 session.add(row)
                 await session.flush()
                 session.add(Message(conversation_id=conversation_id, role="user", body=question))
-                reply = Message(conversation_id=conversation_id, role="assistant", body=answer)
+                session.add(Analitics(question_id=row.id))
 
-                session.add(reply)
-                
-                await session.flush()
-                
-                session.add(Answer(message_id=reply.id, question_id=row.id, text=answer, status="generated"))
-            
-            return row.id
+            question_id = row.id
+        if answer is not None:
+            await self.save_answer(
+                question_id=question_id,
+                answer=answer,
+                sources=sources or [],
+                status=status or ("with_sources" if sources else "unverified"),
+            )
+        return question_id
+
+    async def save_answer(self, *, question_id: int, answer: str,
+                          sources: list[dict[str, object]], status: str) -> None:
+        if status not in {"with_sources", "no_evidence", "unverified", "error"}:
+            raise ValueError("Некорректный статус ответа")
+        async with self.session() as session:
+            async with session.begin():
+                question = await session.get(Question, question_id)
+                if question is None:
+                    raise ValueError("Вопрос не найден")
+                question.answer = answer
+                question.sources = json.dumps(sources, ensure_ascii=False)
+                analytics = await session.scalar(select(Analitics).where(Analitics.question_id == question_id))
+                if analytics is None:
+                    analytics = Analitics(question_id=question_id)
+                    session.add(analytics)
+                analytics.answer_status = status
+                existing = await session.scalar(select(Answer).where(Answer.question_id == question_id))
+                if existing is not None:
+                    existing.text = answer
+                    existing.status = status
+                else:
+                    conversation_id = await session.scalar(
+                        select(Conversation.id).join(User, Conversation.user_id == User.id).where(
+                            User.telegram_id == question.telegram_id,
+                            Conversation.chat_id == question.chat_id,
+                        )
+                    )
+                    reply = Message(conversation_id=conversation_id, role="assistant", body=answer)
+                    session.add(reply)
+                    await session.flush()
+                    session.add(Answer(message_id=reply.id, question_id=question_id, text=answer, status=status))
+
+    async def save_operator_status(self, *, question_id: int, telegram_id: int, status: str) -> None:
+        if status not in {"requested", "delivered", "failed"}:
+            raise ValueError("Некорректный статус оператора")
+        async with self.session() as session:
+            async with session.begin():
+                question = await session.get(Question, question_id)
+                if question is None or question.telegram_id != telegram_id:
+                    raise ValueError("Вопрос не найден")
+                analytics = await session.scalar(select(Analitics).where(Analitics.question_id == question_id))
+                if analytics is None:
+                    analytics = Analitics(question_id=question_id)
+                    session.add(analytics)
+                analytics.operator_status = status
 
     async def save_feedback(
         self,
@@ -131,6 +180,8 @@ class Database:
             async with session.begin():
                 await session.execute(statement)
                 count = await session.scalar(
-                    select(func.count()).select_from(Feedback).where(Feedback.value == "not_helpful")
+                    select(func.count()).select_from(Feedback).where(
+                        Feedback.value == "not_helpful", Feedback.telegram_id == telegram_id
+                    )
                 )
             return int(count or 0)
