@@ -231,6 +231,13 @@ The viewer serves signed source links for PDF and Office documents. The current
 viewer reads originals from `KNOWLEDGE_DIR`; linking directly to versioned render
 artifacts is a future improvement.
 
+## 6. Support analytics
+
+The internal dashboard shows question volumes, related user problems, answer
+outcomes, feedback, and changes between periods. It reads the bot's database.
+A separate worker uses the configured language model to label questions and
+group paraphrases. See [setup, demo and integration](docs/analytics.md).
+
 ## Pipeline overview
 
 ```text

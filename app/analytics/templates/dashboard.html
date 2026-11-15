@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Искра · Аналитика обращений</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #14243a;
+      --muted: #4e5b6d;
+      --paper: #f6f7fa;
+      --line: #dee4ec;
+      --white: #fff;
+      --heat: #9e4409;
+      --warm: #fff0dc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 15px/1.5 Inter, "Segoe UI", system-ui, sans-serif;
+    }
+    .wrap { width: min(1160px, calc(100% - 48px)); margin: auto; }
+    header { color: var(--white); background: #13233b; }
+    .top {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 20px;
+      padding-block: 29px 32px;
+    }
+    .brand { margin: 0 0 5px; color: #ffd38c; font-weight: 700; }
+    h1 { margin: 0; font-size: clamp(27px, 4vw, 43px); letter-spacing: -.035em; line-height: 1.12; }
+    h2 { font-size: 21px; margin: 0 0 12px; letter-spacing: -.022em; }
+    h3 { font-size: 17px; line-height: 1.3; margin: 5px 0 10px; }
+    form { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+    form label { color: #d8e1ee; }
+    select, button {
+      font: inherit;
+      border-radius: 7px;
+      padding: 7px 10px;
+      border: 1px solid #9daabb;
+    }
+    button {
+      background: #ffd38c;
+      color: #242136;
+      border-color: #ffd38c;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    main { padding-block: 21px 38px; }
+    .notice {
+      margin: 0 0 16px;
+      padding: 10px 14px;
+      color: #633002;
+      background: var(--warm);
+      border: 1px solid #f1d4ad;
+      border-radius: 8px;
+    }
+    .period, .note { color: var(--muted); font-size: 13px; }
+    .period { margin: 0 0 12px; }
+    .kpis { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    .kpi, .signal, .topics, .empty {
+      background: var(--white);
+      border: 1px solid var(--line);
+      border-radius: 11px;
+    }
+    .kpi { min-width: 0; padding: 13px 15px 14px; }
+    .kpi span { display: block; color: var(--muted); font-size: 13px; }
+    .kpi strong { display: block; margin-block: 4px 0; font-size: 25px; line-height: 1.25; }
+    .kpi .missing { font-size: 16px; margin-block: 8px 5px; }
+    section { margin-block: 23px 0; }
+    .signals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+    .signal { padding: 15px; min-width: 0; }
+    .signal.rising { border-top: 3px solid #e48531; padding-top: 13px; }
+    .tags { color: var(--muted); margin: 0; font-size: 12px; }
+    .trend { color: var(--heat); font-weight: 700; }
+    .counts { margin: 0; font-size: 14px; font-weight: 650; }
+    .action { margin: 9px 0 0; color: var(--muted); font-size: 14px; }
+    .examples {
+      margin: 10px 0 0;
+      padding-left: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      border-left: 2px solid #eaad6a;
+    }
+    .examples p { margin: 4px 0; overflow-wrap: anywhere; }
+    .empty { margin: 0; padding: 14px; }
+    .topics { overflow-x: auto; }
+    table { width: 100%; text-align: left; border-collapse: collapse; }
+    th, td { padding: 10px 13px; border-bottom: 1px solid var(--line); }
+    th { color: var(--muted); font-size: 13px; font-weight: 600; }
+    tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
+    tbody th { color: var(--ink); font-size: inherit; }
+    .number { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+    @media (max-width: 900px) {
+      .kpis { grid-template-columns: repeat(3, 1fr); }
+      .signals { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 550px) {
+      .wrap { width: calc(100% - 24px); }
+      .top { align-items: start; flex-direction: column; gap: 15px; }
+      .kpis { grid-template-columns: repeat(2, 1fr); }
+      .signals { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap top">
+      <div>
+        <p class="brand">Искра</p>
+        <h1>Аналитика обращений</h1>
+      </div>
+      <form method="get" action="/">
+        <label for="days">Период</label>
+        <select name="days" id="days">
+          {% for value in (7, 14, 30) %}
+          <option value="{{ value }}"{% if value == days %} selected{% endif %}>{{ value }} дней</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Показать</button>
+      </form>
+    </div>
+  </header>
+  <main class="wrap">
+    {% if demo %}
+    <p class="notice"><strong>Демонстрационные данные.</strong> Все вопросы и показатели вымышлены.</p>
+    {% endif %}
+    <p class="period">
+      {{ report.start.strftime('%d.%m.%Y %H:%M') }} – {{ report.end.strftime('%d.%m.%Y %H:%M') }} UTC
+      · Размечено {{ report.current.classified }} из {{ report.current.total }} вопросов
+    </p>
+    <div class="kpis" aria-label="Общие показатели">
+      <div class="kpi">
+        <span>Вопросы</span><strong>{{ report.current.total }}</strong>
+        <span>{{ report.current.users }} разных пользователей</span>
+      </div>
+      <div class="kpi">
+        <span>Ответы с источником</span><strong>{{ report.current.with_sources }}</strong>
+        <span>Из {{ report.current.total }} вопросов</span>
+      </div>
+      <div class="kpi">
+        <span>Без подтверждения</span>
+        <strong>{{ report.current.no_evidence + report.current.unverified }}</strong>
+        <span>{{ report.current.errors }} технических ошибок отдельно</span>
+      </div>
+      <div class="kpi">
+        <span>Ответ помог</span>
+        {% if report.current.rated %}
+        <strong>{{ report.current.helpful }} из {{ report.current.rated }}</strong>
+        <span>Среди оценённых ответов</span>
+        {% else %}<strong class="missing">Нет оценок</strong>{% endif %}
+      </div>
+      <div class="kpi">
+        <span>Передано оператору</span>
+        {% if report.current.escalations %}
+        <strong>{{ report.current.delivered }} из {{ report.current.escalations }}</strong>
+        <span>{{ report.current.failed }} ошибок передачи</span>
+        {% else %}<strong class="missing">Нет событий</strong>{% endif %}
+      </div>
+    </div>
+    {% if report.current.unknown_status %}
+    <p class="note">Для {{ report.current.unknown_status }} вопросов статус ответа отсутствует в истории.</p>
+    {% endif %}
+
+    <section aria-labelledby="signals">
+      <h2 id="signals">Что проверить</h2>
+      {% if report.signals %}
+      <div class="signals">
+        {% for signal in report.signals %}
+        <article class="signal{% if signal.rising %} rising{% endif %}">
+          <p class="tags">
+            {{ areas.get(signal.area, signal.area) }} · {{ kinds.get(signal.kind, signal.kind) }}
+            {% if signal.rising %} · <span class="trend">Доля растёт</span>{% endif %}
+          </p>
+          <h3>{{ signal.title }}</h3>
+          <p class="counts">{{ signal.current.total }} в этом периоде · {{ signal.previous }} в прошлом</p>
+          <p class="tags">
+            Пользователи: {{ signal.current.users }}
+            {% if signal.current.escalations %} · Вызовы оператора: {{ signal.current.escalations }}{% endif %}
+          </p>
+          <p class="action">{{ signal.action }}</p>
+          {% if signal.examples %}
+          <blockquote class="examples">
+            {% for example in signal.examples %}<p>«{{ example }}»</p>{% endfor %}
+          </blockquote>
+          {% endif %}
+        </article>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="empty">Сигнал появится, когда по одной задаче будет хотя бы три вопроса от двух пользователей.</p>
+      {% endif %}
+      <p class="note">
+        Сравнение со столь же длинным предыдущим периодом.
+        В нём размечено {{ report.previous.classified }} из {{ report.previous.total }} вопросов.
+        {% if not report.can_compare_trends %}Для оценки роста нужно больше размеченных данных.{% endif %}
+      </p>
+    </section>
+
+    <section aria-labelledby="topics">
+      <h2 id="topics">Области и типы вопросов</h2>
+      {% if report.topics %}
+      <div class="topics">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Область</th>
+              <th scope="col">Тип вопроса</th>
+              <th scope="col" class="number">За период</th>
+              <th scope="col" class="number">Доля</th>
+              <th scope="col" class="number">Прошлый период</th>
+              <th scope="col" class="number">Без подтверждения</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for topic in report.topics %}
+            <tr>
+              <th scope="row">{{ areas.get(topic.area, topic.area) if topic.area else 'Ожидает разметки' }}</th>
+              <td>{{ kinds.get(topic.kind, topic.kind) if topic.kind else '—' }}</td>
+              <td class="number">{{ topic.current.total }}</td>
+              <td class="number">{{ (100 * topic.current.total / report.current.total)|round|int }}%</td>
+              <td class="number">{{ topic.previous }}</td>
+              <td class="number">{{ topic.current.no_evidence + topic.current.unverified }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <p class="note">Каждое сообщение с вопросом считается отдельно. Пользователи считаются без повторов.</p>
+      {% else %}
+      <p class="empty">За выбранный период вопросов пока нет.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

@@ -12,7 +12,15 @@ from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from app.storage.models import Answer, Conversation, Feedback, Message, Question, User
+from app.storage.models import (
+    Answer,
+    Conversation,
+    Feedback,
+    Message,
+    Question,
+    QuestionAnalytics,
+    User,
+)
 
 
 class Database:
@@ -26,21 +34,24 @@ class Database:
         self._engine: AsyncEngine | None = None
         self._sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
-    async def init(self) -> None:
+    async def init(self, *, migrate: bool = True) -> None:
         if self._engine is not None:
             return
         engine = create_async_engine(self.url)
-        config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
-        try:
-            async with engine.begin() as connection:
-                def upgrade(sync_connection) -> None:
-                    config.attributes["connection"] = sync_connection
-                    command.upgrade(config, "head")
+        if migrate:
+            config = Config(
+                str(Path(__file__).resolve().parents[2] / "alembic.ini")
+            )
+            try:
+                async with engine.begin() as connection:
+                    def upgrade(sync_connection) -> None:
+                        config.attributes["connection"] = sync_connection
+                        command.upgrade(config, "head")
 
-                await connection.run_sync(upgrade)
-        except Exception:
-            await engine.dispose()
-            raise
+                    await connection.run_sync(upgrade)
+            except Exception:
+                await engine.dispose()
+                raise
         self._engine = engine
         self._sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -70,6 +81,7 @@ class Database:
         question: str,
         answer: str,
         sources: list[dict[str, object]],
+        answer_status: str = "generated",
     ) -> int:
         row = Question(
             telegram_id=telegram_id,
@@ -104,8 +116,62 @@ class Database:
                 reply = Message(conversation_id=conversation_id, role="assistant", body=answer)
                 session.add(reply)
                 await session.flush()
-                session.add(Answer(message_id=reply.id, question_id=row.id, text=answer, status="generated"))
+                session.add(
+                    Answer(
+                        message_id=reply.id,
+                        question_id=row.id,
+                        text=answer,
+                        status=answer_status,
+                    )
+                )
             return row.id
+
+    async def save_question_labels(
+        self,
+        labels: list[tuple[int, str, str, str | None]],
+    ) -> None:
+        """Record labels without changing the question's escalation state."""
+        async with self.session() as session, session.begin():
+            for question_id, area, kind, issue in labels:
+                values = {
+                    "area": area,
+                    "kind": kind,
+                    "issue": issue,
+                    "classified_at": func.current_timestamp(),
+                }
+                statement = self._insert(
+                    QuestionAnalytics, {"question_id": question_id, **values}
+                )
+                await session.execute(
+                    statement.on_conflict_do_update(
+                        index_elements=[QuestionAnalytics.question_id],
+                        set_=values,
+                        where=QuestionAnalytics.classified_at.is_(None),
+                    )
+                )
+
+    async def record_escalation(
+        self, *, question_id: int, status: str
+    ) -> None:
+        """Record a request for an operator and the outcome of its delivery."""
+        if status not in ("requested", "delivered", "failed"):
+            raise ValueError("Некорректный статус передачи оператору")
+        statement = self._insert(
+            QuestionAnalytics,
+            {"question_id": question_id, "escalation_status": status},
+        )
+        async with self.session() as session, session.begin():
+            if await session.get(Question, question_id) is None:
+                raise ValueError("Вопрос для эскалации не найден")
+            await session.execute(
+                statement.on_conflict_do_update(
+                    index_elements=[QuestionAnalytics.question_id],
+                    set_={"escalation_status": status},
+                    where=QuestionAnalytics.escalation_status.is_distinct_from(
+                        "delivered"
+                    ),
+                )
+            )
 
     async def save_feedback(
         self,

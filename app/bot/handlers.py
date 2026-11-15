@@ -13,7 +13,7 @@ from aiogram.types import CallbackQuery, Message
 from app.anchors import Locator, LocatorKind, build_anchor_url
 from app.bot.keyboards import feedback_keyboard
 from app.config import Settings
-from app.llm.client import LLMClient
+from app.llm.client import EMPTY_ANSWER_MESSAGE, LLMClient
 from app.rag.index import Chunk, SearchIndex
 from app.rag.retrieve import retrieve_context
 from app.storage.db import Database
@@ -117,14 +117,23 @@ async def handle_question(
     if results:
         try:
             answer = await llm.answer_question(question, results)
+            answer_status = (
+                "unverified"
+                if answer and answer != EMPTY_ANSWER_MESSAGE
+                else "error"
+            )
         except Exception:
             logger.exception("LLM request failed")
             answer = LLM_ERROR_MESSAGE
+            answer_status = "error"
     else:
         answer = NO_RESULTS_MESSAGE
+        answer_status = "no_evidence"
 
     cited = {int(number) for number in re.findall(r"\[(\d+)\]", answer)}
     cited &= set(range(1, len(results) + 1))
+    if cited and answer_status == "unverified":
+        answer_status = "with_sources"
     sources = [
         {
             "document": chunk.document,
@@ -143,6 +152,7 @@ async def handle_question(
             question=question,
             answer=answer,
             sources=sources,
+            answer_status=answer_status,
         )
     except Exception:
         logger.exception("Failed to save question")

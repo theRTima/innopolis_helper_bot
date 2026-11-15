@@ -39,6 +39,7 @@ SYSTEM_PROMPT = (
     "Обычно достаточно 5–10 коротких пунктов; простой вопрос требует "
     "короткого ответа, а полная инструкция может содержать больше шагов."
 )
+EMPTY_ANSWER_MESSAGE = "Не удалось сформировать ответ."
 
 
 class LLMClient:
@@ -109,7 +110,25 @@ class LLMClient:
                 **self._request_options(),
             )
         message = response.choices[0].message
-        answer = (message.content or "Не удалось сформировать ответ.").strip()
+        answer = (message.content or EMPTY_ANSWER_MESSAGE).strip()
         if getattr(response.choices[0], "finish_reason", None) == "length":
             answer += "\n\nОтвет ограничен лимитом и может быть неполным."
         return answer
+
+    async def analyze_support_questions(
+        self, system_prompt: str, payload: str
+    ) -> str:
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": payload},
+            ],
+            temperature=0.1,
+            max_tokens=3000,
+            timeout=45,
+        )
+        return response.choices[0].message.content or ""
+
+    async def close(self) -> None:
+        await self._client.close()
