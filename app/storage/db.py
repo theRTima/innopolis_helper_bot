@@ -506,6 +506,52 @@ class Database:
                 select(TicketJob).where(TicketJob.question_id == question_id)
             )
 
+    async def list_unnotified_tickets(self, *, limit: int = 50) -> list[TicketJob]:
+        now = datetime.now(timezone.utc)
+        async with self.session() as session:
+            return list((await session.scalars(
+                select(TicketJob).where(
+                    TicketJob.kind == "support",
+                    TicketJob.state.in_(("created", "closed")),
+                    TicketJob.external_id.is_not(None),
+                    TicketJob.notice_sent_at.is_(None),
+                    or_(TicketJob.notice_next_attempt_at.is_(None),
+                        TicketJob.notice_next_attempt_at <= now),
+                ).order_by(TicketJob.id).limit(limit)
+            )).all())
+
+    async def list_uncertain_tickets(self, *, provider: str, limit: int = 10) -> list[TicketJob]:
+        now = datetime.now(timezone.utc)
+        async with self.session() as session, session.begin():
+            jobs = list((await session.scalars(
+                select(TicketJob).where(
+                    TicketJob.provider == provider,
+                    TicketJob.state == "uncertain",
+                    or_(TicketJob.next_attempt_at.is_(None),
+                        TicketJob.next_attempt_at <= now),
+                ).order_by(TicketJob.id).limit(limit)
+            )).all())
+            for job in jobs:
+                job.next_attempt_at = now + timedelta(minutes=5)
+            return jobs
+
+    async def record_ticket_notice(self, *, ticket_id: int, error: str | None) -> None:
+        now = datetime.now(timezone.utc)
+        async with self.session() as session, session.begin():
+            ticket = await session.get(TicketJob, ticket_id)
+            if ticket is None:
+                raise ValueError("Ticket job not found")
+            ticket.notice_attempts += 1
+            if error is None:
+                ticket.notice_sent_at = now
+                ticket.notice_next_attempt_at = None
+                ticket.notice_error = None
+            else:
+                ticket.notice_next_attempt_at = now + timedelta(
+                    seconds=min(30 * 2 ** min(ticket.notice_attempts, 6), 3600)
+                )
+                ticket.notice_error = error[:255]
+
     async def get_ticket_for_issue(
         self, *, area: str, kind: str, title: str
     ) -> TicketJob | None:
@@ -572,7 +618,7 @@ class Database:
                 if ticket.external_id != external_id:
                     raise ValueError("Ticket job already linked elsewhere")
                 return ticket
-            if ticket.state != "creating":
+            if ticket.state not in {"creating", "uncertain"}:
                 raise ValueError("Ticket job was not claimed")
             ticket.external_id = external_id
             ticket.external_url = url
@@ -606,7 +652,8 @@ class Database:
             ticket.last_error = error[:1000]
             ticket.next_attempt_at = (
                 now + timedelta(seconds=min(30 * 2 ** min(ticket.attempts, 6), 3600))
-                if ticket.state == "retry" else None
+                if ticket.state == "retry" else
+                now + timedelta(minutes=5) if ticket.state == "uncertain" else None
             )
             ticket.updated_at = now
             if ticket.kind == "support" and ticket.state == "failed":

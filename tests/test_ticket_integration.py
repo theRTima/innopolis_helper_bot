@@ -83,7 +83,13 @@ async def test_explicit_operator_request_queues_ticket(tmp_path):
         )
         settings = SimpleNamespace(ticket_provider="demo", support_url="")
         await handlers.handle_question(message, None, None, db, settings)
-        job = await db.get_ticket_for_question(question_id)
+        assert await db.get_ticket_for_question(question_id) is None
+        assert "Опишите проблему" in message.answer.call_args.args[0]
+        message.text = "/operator Не могу открыть фильтр в БАРС-Офисе"
+        await handlers.handle_operator_command(message, db, settings)
+        latest = await db.latest_question_id(telegram_id=8, chat_id=9)
+        assert latest != question_id
+        job = await db.get_ticket_for_question(latest)
         assert job is not None and job.state == "queued"
         assert "принят" in message.answer.call_args.args[0]
         # An unanswered question should not inherit later unrelated chat text.

@@ -112,14 +112,37 @@ async def _request_operator(
         else:
             await message.answer("Создание заявок пока не настроено.")
         return
-    question_id = await db.latest_question_id(
-        telegram_id=message.from_user.id, chat_id=message.chat.id
-    )
+    question_id = None
+    replied = getattr(message, "reply_to_message", None)
+    markup = getattr(replied, "reply_markup", None)
+    if markup is not None:
+        for row in markup.inline_keyboard:
+            for button in row:
+                parts = (button.callback_data or "").split(":")
+                if len(parts) == 3 and parts[0] in {"resolution", "fb"}:
+                    try:
+                        question_id = int(parts[2])
+                    except ValueError:
+                        pass
+                    break
+            if question_id is not None:
+                break
     if question_id is None:
+        text = (message.text or "").strip()
+        description = text.partition(" ")[2].strip() if text.startswith("/operator ") else ""
+        if not description:
+            await message.answer(
+                "Опишите проблему командой /operator <описание> или ответьте "
+                "командой /operator на сообщение бота с нужным ответом."
+            )
+            return
+        if not valid_question(description):
+            await message.answer("Опишите проблему словами, чтобы создать заявку.")
+            return
         question_id = await db.save_question(
             telegram_id=message.from_user.id,
             chat_id=message.chat.id,
-            question=(message.text or "").strip() or "Запрос оператора",
+            question=description,
         )
     job, _ = await request_support_ticket(
         db,
@@ -130,17 +153,47 @@ async def _request_operator(
     await message.answer(_ticket_message(job))
 
 
-def _format_sources(
-    results: list[tuple[float, Chunk]], cited: set[int] | None = None
-) -> str:
-    if not results:
-        return ""
-    lines = "\n".join(
-        f"[{position}] {chunk.document}, стр. {chunk.page_label}"
-        for position, (_, chunk) in enumerate(results, start=1)
-        if cited is None or position in cited
-    )
-    return f"\n\nИсточники:\n{lines}" if lines else ""
+def _source_links(sources: list[dict], settings: Settings) -> list[tuple[str, str]]:
+    if not settings.documents_base_url or not settings.document_link_secret:
+        return []
+    links = []
+    seen: set[tuple[str, str, str]] = set()
+    for source in sources:
+        document_id = source.get("document_id")
+        page_from = source.get("page_from")
+        if not isinstance(document_id, str):
+            continue
+        raw_locator = source.get("locator")
+        try:
+            if isinstance(raw_locator, dict):
+                locator = Locator(
+                    LocatorKind(raw_locator["kind"]), raw_locator["value"],
+                    raw_locator.get("subvalue"),
+                )
+            elif isinstance(page_from, int):
+                locator = Locator(LocatorKind.PDF_PAGE, page_from)
+            else:
+                continue
+        except (KeyError, TypeError, ValueError):
+            logger.warning("Skipping invalid source locator: %s", document_id)
+            continue
+        key = (document_id, locator.kind, locator.fragment())
+        if key in seen:
+            continue
+        seen.add(key)
+        links.append((
+            f"Открыть источник [{source['position']}] · {source.get('page', '')}",
+            build_anchor_url(
+                settings.documents_base_url,
+                document_id,
+                locator,
+                secret=settings.document_link_secret,
+                view=("rendered" if source.get("source_format") in
+                      {"docx", "xlsx", "pptx"} and
+                      locator.kind == LocatorKind.PDF_PAGE else None),
+            ),
+        ))
+    return links
 
 
 def _truncate(text: str) -> str:
@@ -151,8 +204,6 @@ def _truncate(text: str) -> str:
 
 @router.message(CommandStart())
 async def handle_start(message: Message, index: SearchIndex) -> None:
-    if message.from_user and gibberish_mute.is_muted(message.from_user.id):
-        return
     documents = sorted({chunk.document for chunk in index.chunks})
     if documents:
         corpus = "\n".join(f"- {document}" for document in documents)
@@ -172,8 +223,6 @@ async def handle_start(message: Message, index: SearchIndex) -> None:
 
 @router.message(Command("help"))
 async def handle_help(message: Message) -> None:
-    if message.from_user and gibberish_mute.is_muted(message.from_user.id):
-        return
     await message.answer(
         "Как пользоваться ботом:\n"
         "1. Напишите вопрос обычным текстом.\n"
@@ -209,11 +258,13 @@ async def handle_question(
     if gibberish_mute.is_muted(message.from_user.id):
         return
     if OPERATOR_REQUEST.fullmatch(question):
+        gibberish_mute.record_valid(message.from_user.id)
         await _request_operator(message, db, settings)
         return
     if not valid_question(question):
         gibberish_mute.record_invalid(message.from_user.id)
         return
+    gibberish_mute.record_valid(message.from_user.id)
 
     question_id = await db.save_question(
         telegram_id=message.from_user.id,
@@ -286,8 +337,9 @@ async def handle_question(
     try:
         if index is not None:
             await asyncio.to_thread(index.refresh)
-        results = [] if scope_blocked else retrieve_context(
-            index, question, top_k=settings.top_k, min_score=settings.min_score,
+        results = [] if scope_blocked else await asyncio.to_thread(
+            retrieve_context, index, question,
+            top_k=settings.top_k, min_score=settings.min_score,
         )
     except Exception:
         logger.exception("Retrieval failed")
@@ -320,8 +372,13 @@ async def handle_question(
     cited &= set(range(1, len(results) + 1))
     sources = [
         {
+            "position": position,
             "document": chunk.document,
+            "document_id": chunk.document_id or chunk.document,
             "page": chunk.page_label,
+            "page_from": chunk.page_from,
+            "locator": chunk.locator,
+            "source_format": chunk.source_format,
             "score": round(score, 4),
         }
         for position, (score, chunk) in enumerate(results, start=1)
@@ -330,42 +387,22 @@ async def handle_question(
     if status == "unverified" and sources:
         status = "with_sources"
 
-    reply = _truncate(answer) + _format_sources(results, cited)
-    source_links: list[tuple[str, str]] = []
-    if settings.documents_base_url and settings.document_link_secret:
-        seen: set[tuple[str, int]] = set()
-        for position, (_, chunk) in enumerate(results, start=1):
-            if position not in cited:
-                continue
-            document_id = chunk.document_id or chunk.document
-            key = (document_id, chunk.page_from)
-            if key in seen:
-                continue
-            seen.add(key)
-            source_links.append(
-                (
-                    f"Открыть источник [{position}] · стр. {chunk.page_label}",
-                    build_anchor_url(
-                        settings.documents_base_url,
-                        document_id,
-                        Locator(LocatorKind.PDF_PAGE, chunk.page_from),
-                        secret=settings.document_link_secret,
-                    ),
-                )
-            )
+    reply = _truncate(answer)
+    source_links = _source_links(sources, settings)
+    other_links: list[tuple[str, str]] = []
     offer_support = status == "no_evidence" and await db.clarification_count(
         telegram_id=message.from_user.id, chat_id=message.chat.id) >= 3
     if offer_support and settings.support_url:
-        source_links.append(
+        other_links.append(
             ("Связаться со специалистом", settings.support_url)
         )
     markup = (
         feedback_keyboard(
             question_id,
-            source_links,
-            ticket_enabled=bool(getattr(settings, "ticket_provider", "")),
+            other_links,
+            has_sources=bool(source_links),
         )
-        if question_id is not None or source_links
+        if question_id is not None or other_links
         else None
     )
     try:
@@ -382,6 +419,54 @@ async def handle_question(
     )
     if offer_support and settings.support_url:
         await db.record_escalation(question_id=question_id, status="offered")
+
+
+@router.callback_query(F.data.startswith("sources:"))
+async def handle_sources(
+    callback: CallbackQuery, db: Database, settings: Settings
+) -> None:
+    try:
+        parts = (callback.data or "").split(":")
+        if len(parts) != 2:
+            raise ValueError("Invalid source callback")
+        question_id = int(parts[1])
+        context = await db.get_question_context(
+            question_id=question_id, telegram_id=callback.from_user.id
+        )
+    except (TypeError, ValueError):
+        await callback.answer("Источники этого ответа недоступны.", show_alert=True)
+        return
+    message = callback.message
+    if not isinstance(message, Message) or message.reply_markup is None:
+        await callback.answer("Источники этого ответа недоступны.", show_alert=True)
+        return
+    links = _source_links(context["sources"], settings)
+    if not links:
+        await callback.answer("Ссылки на источники недоступны.", show_alert=True)
+        return
+    rows = []
+    replaced = False
+    for row in message.reply_markup.inline_keyboard:
+        if any(button.callback_data == callback.data for button in row):
+            rows.extend([
+                [InlineKeyboardButton(text=label, url=url)]
+                for label, url in links
+            ])
+            replaced = True
+        else:
+            rows.append(row)
+    if not replaced:
+        await callback.answer("Источники уже показаны.")
+        return
+    try:
+        await message.edit_reply_markup(
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+        )
+    except Exception:
+        logger.exception("Could not reveal source links")
+        await callback.answer("Не удалось показать источники.", show_alert=True)
+        return
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("fb:"))
@@ -417,7 +502,9 @@ async def handle_feedback(callback: CallbackQuery, db: Database) -> None:
     await _remove_answer_buttons(callback)
 
 
-async def _remove_answer_buttons(callback: CallbackQuery) -> None:
+async def _remove_answer_buttons(
+    callback: CallbackQuery, *, ticket_question_id: int | None = None
+) -> None:
     message = callback.message
     if (
         message is None or not isinstance(message, Message)
@@ -429,11 +516,16 @@ async def _remove_answer_buttons(callback: CallbackQuery) -> None:
         remaining = [
             button for button in row
             if not (button.callback_data or "").startswith(
-                ("fb:", "resolution:")
+                ("fb:", "resolution:", "ticket:create:")
             )
         ]
         if remaining:
             rows.append(remaining)
+    if ticket_question_id is not None:
+        rows.append([InlineKeyboardButton(
+            text="Создать заявку",
+            callback_data=f"ticket:create:{ticket_question_id}",
+        )])
     try:
         markup = InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
         await message.edit_reply_markup(reply_markup=markup)
@@ -447,8 +539,9 @@ async def handle_resolution(
 ) -> None:
     try:
         _, value, raw_id = (callback.data or "").split(":")
+        question_id = int(raw_id)
         await db.save_resolution(
-            question_id=int(raw_id),
+            question_id=question_id,
             telegram_id=callback.from_user.id,
             value=value,
         )
@@ -456,10 +549,15 @@ async def handle_resolution(
         await callback.answer("Не удалось сохранить ответ.")
         return
     response = "Спасибо, ответ сохранён."
-    if value == "unresolved" and getattr(settings, "ticket_provider", ""):
+    ticket_question_id = (
+        question_id
+        if value == "unresolved" and getattr(settings, "ticket_provider", "")
+        else None
+    )
+    if ticket_question_id is not None:
         response = "Вопрос не решён. Нажмите «Создать заявку» под ответом."
     await callback.answer(response)
-    await _remove_answer_buttons(callback)
+    await _remove_answer_buttons(callback, ticket_question_id=ticket_question_id)
 
 
 @router.callback_query(F.data.startswith("ticket:create:"))

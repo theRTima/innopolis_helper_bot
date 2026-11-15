@@ -310,6 +310,32 @@ class JiraServiceManagementProvider(_RemoteProvider):
         )
         return self._result(data)
 
+    async def find_by_local_key(self, local_key: str) -> TicketResult | None:
+        """Find a request after an ambiguous create response without creating a duplicate."""
+        marker = f"Ref: {local_key}"
+        for start in range(0, 200, 50):
+            params = urlencode({"serviceDeskId": self.service_desk_id,
+                                "start": start, "limit": 50})
+            data = await self._request(
+                "GET", f"/rest/servicedeskapi/request?{params}",
+                headers=self.headers,
+            )
+            values = data.get("values", [])
+            if not isinstance(values, list):
+                return None
+            for item in values:
+                if not isinstance(item, dict):
+                    continue
+                fields = item.get("requestFieldValues", [])
+                descriptions = [field.get("value", "") for field in fields
+                                if isinstance(field, dict) and field.get("fieldId") == "description"]
+                if any(isinstance(value, str) and marker in value.splitlines()
+                       for value in descriptions):
+                    return self._result(item)
+            if data.get("isLastPage", True) or not values:
+                break
+        return None
+
 
 class ZendeskProvider(_RemoteProvider):
     """Zendesk Support tickets API, using an agent or OAuth token."""

@@ -37,6 +37,7 @@ class Chunk:
     origin: str = "docling"
     data: dict | None = None
     locator: dict | None = None
+    source_format: str = ""
     chunk_file: str = field(default="", compare=False)
     asset_ids: tuple[str, ...] = field(default=(), compare=False)
     assets: tuple[dict, ...] = field(default=(), compare=False)
@@ -126,6 +127,7 @@ def _read_chunk_file(chunks_path: Path) -> list[Chunk]:
                         if isinstance(item.get("locator"), dict)
                         else None
                     ),
+                    source_format=Path(source).suffix.lower().lstrip("."),
                 )
             )
     return chunks
@@ -270,6 +272,10 @@ class SearchIndex:
             for chunk in chunks
         ]
         self._term_freqs = [Counter(tokens) for tokens in self._tokens]
+        self._postings: dict[str, list[int]] = {}
+        for index, frequencies in enumerate(self._term_freqs):
+            for term in frequencies:
+                self._postings.setdefault(term, []).append(index)
         self._doc_lengths = [len(tokens) for tokens in self._tokens]
         self._avg_length = (
             sum(self._doc_lengths) / len(self._doc_lengths) if chunks else 0.0
@@ -367,8 +373,11 @@ class SearchIndex:
         if not expanded_terms:
             return []
 
+        candidates = sorted({index for term, _ in expanded_terms
+                             for index in self._postings.get(term, ())})
         scored: list[tuple[float, Chunk]] = []
-        for index, frequencies in enumerate(self._term_freqs):
+        for index in candidates:
+            frequencies = self._term_freqs[index]
             length = self._doc_lengths[index]
             score = 0.0
             for term, weight in expanded_terms:

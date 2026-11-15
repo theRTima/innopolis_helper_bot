@@ -53,6 +53,7 @@ async def test_handler_model_and_delivery_errors(tmp_path, monkeypatch):
     settings = SimpleNamespace(top_k=2, min_score=0, documents_base_url="",
                                document_link_secret="", support_url="https://example.com/help")
     await handlers.handle_question(message, None, SimpleNamespace(answer_question=AsyncMock(return_value="Ответ [1]")), db, settings)
+    assert "Источники:" not in message.answer.call_args.args[0]
     await handlers.handle_question(message, None, SimpleNamespace(answer_question=AsyncMock(side_effect=RuntimeError("model"))), db, settings)
     message.answer = AsyncMock(side_effect=RuntimeError("telegram"))
     with pytest.raises(RuntimeError, match="telegram"):
@@ -69,6 +70,13 @@ def test_input_checks():
     assert not valid_question("!!!!!!!!")
     assert not valid_question("ыыыыыыыы")
     assert not valid_question("asdfgh")
+    assert not valid_question("пдыоовплд")
+    assert not valid_question("ыфвыф")
+    assert not valid_question("улаофылв")
+    assert valid_question("БЦ Сотрудника")
+    assert valid_question("Как найти реестр мебели?")
+    assert valid_question("Здравствуйте, подскажите про инструкцию")
+    assert valid_question("Встреча с сотрудником")
     limiter = RateLimiter()
     assert limiter.allow(1, 1)
     assert not limiter.allow(1, 1)
@@ -105,6 +113,22 @@ def test_gibberish_mute_escalation(monkeypatch):
         assert mute.is_muted(1)
         now[0] += 1
         assert not mute.is_muted(1)
+
+
+def test_invalid_streak_resets_after_valid_input_or_idle_time(monkeypatch):
+    now = [100.0]
+    monkeypatch.setattr(input_filter.time, "monotonic", lambda: now[0])
+    mute = GibberishMute(window=300)
+    for _ in range(9):
+        mute.record_invalid(1)
+    mute.record_valid(1)
+    mute.record_invalid(1)
+    assert mute._counts[1] == 1
+    assert not mute.is_muted(1)
+    now[0] += 301
+    mute.record_invalid(1)
+    assert mute._counts[1] == 1
+    assert not mute.is_muted(1)
 
 
 @pytest.mark.asyncio

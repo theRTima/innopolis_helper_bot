@@ -59,6 +59,7 @@ def build_anchor_url(
     secret: str,
     ttl_seconds: int = 7 * 24 * 60 * 60,
     now: int | None = None,
+    view: str | None = None,
 ) -> str:
     """Return a URL of the form ``<viewer>/documents/<id>#<locator>``.
 
@@ -78,7 +79,10 @@ def build_anchor_url(
 
     path = f"{parsed.path.rstrip('/')}/documents/{quote(document_id, safe='')}"
     expires_at = (int(time.time()) if now is None else now) + ttl_seconds
-    query = urlencode(
-        {"expires": expires_at, "signature": sign_document_id(document_id, secret, expires_at)}
-    )
+    if view not in {None, "rendered"}:
+        raise ValueError("Unknown document view")
+    params = {"expires": expires_at, "signature": sign_document_id(document_id, secret, expires_at)}
+    if view:
+        params["view"] = view
+    query = urlencode(params)
     return urlunsplit((parsed.scheme, parsed.netloc, path, query, locator.fragment()))

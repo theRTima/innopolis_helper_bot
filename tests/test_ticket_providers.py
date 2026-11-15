@@ -95,14 +95,31 @@ async def test_jira_create_and_status_contract():
     assert updated.status == "Done"
     assert updated.closed
     assert transport.calls[0]["url"].endswith("/rest/servicedeskapi/request")
-    description = transport.calls[0]["json"]["requestFieldValues"][
-        "description"
-    ]
-    assert description.endswith(
-        "Ref: support:42"
-    )
+    description = transport.calls[0]["json"]["requestFieldValues"]["description"]
+    assert description.endswith("Ref: support:42")
     assert transport.calls[0]["headers"]["Authorization"] == "Bearer secret"
     assert transport.calls[1]["method"] == "GET"
+
+
+@pytest.mark.asyncio
+async def test_jira_reconciles_only_exact_local_reference():
+    transport = FakeTransport(responses=[(200, {
+        "isLastPage": True,
+        "values": [
+            {"issueKey": "HELP-1", "requestFieldValues": [
+                {"fieldId": "description", "value": "Ref: support:420"}]},
+            {"issueKey": "HELP-42", "currentStatus": {"status": "Open"},
+             "requestFieldValues": [
+                 {"fieldId": "description", "value": "Issue details\n\nRef: support:42"}]},
+        ],
+    })])
+    provider = JiraServiceManagementProvider(
+        "https://jira.example", "secret", "10", "25", transport=transport
+    )
+    found = await provider.find_by_local_key("support:42")
+    assert found is not None and found.external_id == "HELP-42"
+    assert transport.calls[0]["method"] == "GET"
+    assert "serviceDeskId=10" in transport.calls[0]["url"]
 
 
 @pytest.mark.asyncio

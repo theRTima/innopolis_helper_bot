@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import os
@@ -48,7 +49,7 @@ def create_app(
         expected = sign_document_id(document_id, signing_secret, expires)
         if not hmac.compare_digest(expected, signature):
             raise HTTPException(status_code=403, detail="Подпись ссылки неверна")
-        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", document_id):
+        if not re.fullmatch(r"[^/\\\x00-\x1f]{1,160}", document_id) or document_id in {".", ".."}:
             raise HTTPException(status_code=404, detail="Документ не найден")
         candidates = [
             (root / f"{document_id}{suffix}").resolve()
@@ -78,16 +79,41 @@ def create_app(
             raise HTTPException(status_code=409, detail="ID документа неоднозначен")
         return matches[0]
 
+    def rendered_pdf(source: Path) -> Path:
+        version = source.parent
+        if (version.parent.parent != processed_root or
+                not version.name.startswith("sha256-")):
+            raise HTTPException(status_code=404, detail="PDF представление не найдено")
+        candidates = []
+        for manifest_path in (version / "renders").glob("render-*/render_manifest.json"):
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            pdf = manifest_path.parent / "document.pdf"
+            if (manifest.get("status") == "ready" and
+                    manifest.get("source_sha256") == version.name.removeprefix("sha256-") and
+                    pdf.is_file()):
+                candidates.append((str(manifest.get("created_at", "")), pdf))
+        if not candidates:
+            raise HTTPException(status_code=404, detail="PDF представление не найдено")
+        return max(candidates, key=lambda item: item[0])[1]
+
     @app.get("/documents/{document_id}", response_class=HTMLResponse)
     async def view_document(
         document_id: str,
         expires: int = Query(...),
         signature: str = Query(...),
+        view: str | None = Query(None),
     ) -> HTMLResponse:
         path = verify(document_id, expires, signature)
-        if path.suffix.lower() != ".pdf":
+        if view not in {None, "rendered"}:
+            raise HTTPException(status_code=400, detail="Неизвестный вид документа")
+        if view == "rendered":
+            rendered_pdf(path)
+        if path.suffix.lower() != ".pdf" and view is None:
             try:
-                response = HTMLResponse(render_office(path))
+                response = HTMLResponse(await asyncio.to_thread(render_office, path))
             except (KeyError, ValueError, zipfile.BadZipFile) as error:
                 raise HTTPException(
                     status_code=422,
@@ -99,11 +125,12 @@ def create_app(
             return response
         safe_id = quote(document_id, safe="")
         title = document_id.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        view_arg = "&amp;view=rendered" if view == "rendered" else ""
         html = f"""<!doctype html>
 <html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>{title}</title>
 <style>html,body,iframe{{width:100%;height:100%;margin:0;border:0;background:#333}}</style>
-<iframe title="Документ" src="/documents/{safe_id}/file?expires={expires}&amp;signature={signature}"
+        <iframe title="Документ" src="/documents/{safe_id}/file?expires={expires}&amp;signature={signature}{view_arg}"
  referrerpolicy="no-referrer"></iframe>
 <script>const frame=document.querySelector('iframe');frame.src += location.hash;</script>
 </html>"""
@@ -118,8 +145,13 @@ def create_app(
         document_id: str,
         expires: int = Query(...),
         signature: str = Query(...),
+        view: str | None = Query(None),
     ) -> FileResponse:
         path = verify(document_id, expires, signature)
+        if view == "rendered":
+            path = rendered_pdf(path)
+        elif view is not None:
+            raise HTTPException(status_code=400, detail="Неизвестный вид документа")
         if path.suffix.lower() != ".pdf":
             raise HTTPException(
                 status_code=415,

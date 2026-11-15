@@ -100,6 +100,33 @@ def test_viewer_serves_uploaded_pdf_from_versioned_store(tmp_path) -> None:
     assert response.content == b"%PDF-uploaded"
 
 
+def test_viewer_serves_office_rendered_pdf_for_page_anchor(tmp_path) -> None:
+    document_id = "office-abc"
+    digest = "a" * 64
+    version = tmp_path / "processed" / document_id / f"sha256-{digest}"
+    version.mkdir(parents=True)
+    (version / "original.docx").write_bytes(b"office-source")
+    (version / "manifest.json").write_text(
+        '{"document_id":"office-abc","original_path":"original.docx",'
+        '"created_at":"2026-11-15T10:00:00+00:00"}', encoding="utf-8"
+    )
+    render = version / "renders" / "render-test"
+    render.mkdir(parents=True)
+    (render / "document.pdf").write_bytes(b"%PDF-rendered")
+    (render / "render_manifest.json").write_text(
+        '{"status":"ready","source_sha256":"' + digest + '",'
+        '"created_at":"2026-11-15T10:00:00+00:00"}', encoding="utf-8"
+    )
+    client = TestClient(create_app(tmp_path / "knowledge", "secret", tmp_path / "processed"))
+    expires = 4_000_000_000
+    signature = sign_document_id(document_id, "secret", expires)
+    page = client.get(f"/documents/{document_id}?expires={expires}&signature={signature}&view=rendered")
+    pdf = client.get(f"/documents/{document_id}/file?expires={expires}&signature={signature}&view=rendered")
+    assert page.status_code == 200
+    assert "view=rendered" in page.text
+    assert pdf.content == b"%PDF-rendered"
+
+
 def test_viewer_rejects_invalid_signature_and_path_traversal(tmp_path) -> None:
     client = TestClient(create_app(tmp_path, "test-secret"))
 

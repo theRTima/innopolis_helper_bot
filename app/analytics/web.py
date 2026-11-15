@@ -42,7 +42,6 @@ def create_app() -> FastAPI:
     task_enabled = (
         db is not None and bool(settings.ticket_provider) and bool(password)
     )
-    show_examples = show_examples or task_enabled
     template = Environment(
         loader=PackageLoader("app.analytics", "templates"),
         autoescape=select_autoescape(["html"]),

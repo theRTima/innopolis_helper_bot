@@ -33,6 +33,17 @@ class RecordingNotifier:
 
 
 @dataclass
+class FailsOnceNotifier(RecordingNotifier):
+    failures_left: int = 1
+
+    async def created(self, job: TicketJob, result: TicketResult) -> None:
+        if self.failures_left:
+            self.failures_left -= 1
+            raise RuntimeError("Telegram unavailable")
+        await super().created(job, result)
+
+
+@dataclass
 class FailingProvider:
     error: TicketProviderError
     name: str = "demo"
@@ -59,11 +70,12 @@ async def test_telegram_notice_uses_requester_private_chat(monkeypatch):
     monkeypatch.setattr("app.tickets.worker.Bot", FakeBot)
     notifier = TelegramTicketNotifier("fake-token")
     job = SimpleNamespace(kind="support", telegram_id=123, chat_id=456)
-    result = TicketResult("DEMO-1", "demo://tickets/DEMO-1", "new")
+    result = TicketResult("DEMO-1", "https://jira.example/DEMO-1", "new")
     await notifier.created(job, result)
     await notifier.failed(job, uncertain=True)
     assert [chat_id for chat_id, _ in notifier.bot.messages] == [123, 123]
     assert "DEMO-1" in notifier.bot.messages[0][1]
+    assert result.url not in notifier.bot.messages[0][1]
     assert "повторно" in notifier.bot.messages[1][1]
 
 
@@ -113,6 +125,28 @@ async def test_worker_creates_once_and_reports_private_ticket(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_failed_creation_notice_is_retried_without_new_ticket(tmp_path):
+    db = Database(tmp_path / "notice.db")
+    await db.init()
+    try:
+        job = await _support_job(db)
+        notifier = FailsOnceNotifier()
+        worker = TicketWorker(db, DemoTicketProvider(), notifier=notifier)
+        assert (await worker.run_once()).created == 1
+        linked = await db.get_ticket_for_question(job.question_id)
+        assert linked.notice_attempts == 1 and linked.notice_sent_at is None
+        async with db.session() as session, session.begin():
+            stored = await session.get(TicketJob, job.id)
+            stored.notice_next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        assert (await worker.run_once()).created == 0
+        linked = await db.get_ticket_for_question(job.question_id)
+        assert linked.notice_sent_at is not None
+        assert notifier.created_jobs == [(job.id, linked.external_id)]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_ambiguous_create_is_not_retried_or_marked_delivered(tmp_path):
     db = Database(tmp_path / "uncertain.db")
     await db.init()
@@ -134,6 +168,38 @@ async def test_ambiguous_create_is_not_retried_or_marked_delivered(tmp_path):
 
         await worker.run_once()
         assert provider.creates == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_uncertain_ticket_links_existing_remote_request(tmp_path):
+    db = Database(tmp_path / "reconcile.db")
+    await db.init()
+    try:
+        job = await _support_job(db)
+        claimed = await db.claim_next_ticket(provider="demo")
+        assert claimed.id == job.id
+        await db.mark_ticket_failure(
+            ticket_id=job.id, error="response lost", retryable=True,
+            uncertain=True,
+        )
+        async with db.session() as session, session.begin():
+            stored = await session.get(TicketJob, job.id)
+            stored.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+
+        class ExistingProvider(FailingProvider):
+            async def find_by_local_key(self, local_key: str) -> TicketResult:
+                assert local_key == job.dedupe_key
+                return TicketResult("HELP-42", "https://jira.example/HELP-42", "Open")
+
+        provider = ExistingProvider(TicketProviderError("must not create"))
+        notifier = RecordingNotifier()
+        result = await TicketWorker(db, provider, notifier=notifier).run_once()
+        linked = await db.get_ticket_for_question(job.question_id)
+        assert result.created == 0 and provider.creates == 0
+        assert linked.state == "created" and linked.external_id == "HELP-42"
+        assert notifier.created_jobs == [(job.id, "HELP-42")]
     finally:
         await db.close()
 

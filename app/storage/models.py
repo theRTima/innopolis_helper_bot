@@ -321,6 +321,10 @@ class TicketJob(Base):
     external_id: Mapped[str | None] = mapped_column(String(255))
     external_url: Mapped[str | None] = mapped_column(Text)
     external_status: Mapped[str | None] = mapped_column(String(64))
+    notice_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notice_next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    notice_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    notice_error: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.current_timestamp()
     )

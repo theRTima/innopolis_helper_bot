@@ -9,12 +9,18 @@ def feedback_keyboard(
     question_id: int | None,
     source_links: list[tuple[str, str]] | None = None,
     *,
-    ticket_enabled: bool = False,
+    has_sources: bool = False,
 ) -> InlineKeyboardMarkup:
-    rows = [
+    rows = []
+    if has_sources and question_id is not None:
+        rows.append([InlineKeyboardButton(
+            text="Показать источники",
+            callback_data=f"sources:{question_id}",
+        )])
+    rows.extend([
         [InlineKeyboardButton(text=label, url=url)]
         for label, url in (source_links or [])
-    ]
+    ])
     if question_id is not None:
         rows.append([
             InlineKeyboardButton(
@@ -26,11 +32,4 @@ def feedback_keyboard(
                 callback_data=f"resolution:unresolved:{question_id}",
             ),
         ])
-        if ticket_enabled:
-            rows.append([
-                InlineKeyboardButton(
-                    text="Создать заявку",
-                    callback_data=f"ticket:create:{question_id}",
-                )
-            ])
     return InlineKeyboardMarkup(inline_keyboard=rows)

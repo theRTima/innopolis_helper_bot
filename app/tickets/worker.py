@@ -42,8 +42,6 @@ class TelegramTicketNotifier:
         if job.kind != "support" or job.telegram_id is None:
             return
         text = f"Заявка {result.external_id} создана. Статус: {result.status}."
-        if result.url.startswith(("https://", "http://")):
-            text += f"\n{result.url}"
         await self.bot.send_message(chat_id=job.telegram_id, text=text)
 
     async def failed(self, job: TicketJob, *, uncertain: bool) -> None:
@@ -100,8 +98,13 @@ class TicketWorker:
             return
         try:
             await self.notifier.created(job, result)
-        except Exception:
+        except Exception as error:
             logger.exception("Ticket creation notice could not be delivered")
+            await self.db.record_ticket_notice(
+                ticket_id=job.id, error=type(error).__name__
+            )
+        else:
+            await self.db.record_ticket_notice(ticket_id=job.id, error=None)
 
     async def _notify_failed(
         self, job: TicketJob, *, uncertain: bool
@@ -119,6 +122,23 @@ class TicketWorker:
         stale = await self.db.mark_stale_claims_uncertain(before=old)
         if stale:
             logger.warning("Marked %d stale ticket claims uncertain", stale)
+
+        find_remote = getattr(self.provider, "find_by_local_key", None)
+        if find_remote is not None:
+            for job in await self.db.list_uncertain_tickets(
+                provider=self.provider.name, limit=self.create_limit
+            ):
+                try:
+                    found = await find_remote(job.dedupe_key)
+                except Exception:
+                    logger.exception("Could not reconcile ticket job %s", job.id)
+                    continue
+                if found is not None:
+                    updated = await self.db.mark_ticket_created(
+                        ticket_id=job.id, external_id=found.external_id,
+                        url=found.url, status=found.status,
+                    )
+                    await self._notify_created(updated, found)
 
         created = retrying = uncertain = failed = polled = closed = 0
         for _ in range(self.create_limit):
@@ -178,6 +198,17 @@ class TicketWorker:
             )
             created += 1
             await self._notify_created(updated, result)
+
+        if self.notifier is not None:
+            for job in await self.db.list_unnotified_tickets(limit=self.poll_limit):
+                await self._notify_created(
+                    job,
+                    TicketResult(
+                        external_id=job.external_id,
+                        url=job.external_url or "",
+                        status=job.external_status or job.state,
+                    ),
+                )
 
         jobs = await self.db.list_pollable_tickets(
             provider=self.provider.name, limit=self.poll_limit
