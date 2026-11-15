@@ -247,8 +247,6 @@ class DocumentImportJob(Base):
     checksum_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="queued", index=True)
     progress_percent: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    progress_current: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    progress_total: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     progress_stage: Mapped[str | None] = mapped_column(String(32))
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.current_timestamp())

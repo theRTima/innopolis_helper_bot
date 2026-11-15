@@ -89,8 +89,6 @@ async def update_progress(
         if job is None or job.status != "processing":
             return
         job.progress_stage = stage
-        job.progress_current = current
-        job.progress_total = total
         job.progress_percent = percent
 
 
@@ -155,8 +153,6 @@ async def save_success(sessions, job_id: int, title: str, result: tuple) -> None
         job.status = "completed"
         job.error = None
         job.progress_percent = 100
-        if job.progress_total:
-            job.progress_current = job.progress_total
         job.progress_stage = "completed"
         job.finished_at = datetime.now(timezone.utc)
 
@@ -186,8 +182,6 @@ async def claim_job(sessions) -> DocumentImportJob | None:
         job.started_at = datetime.now(timezone.utc)
         job.error = None
         job.progress_percent = 0
-        job.progress_current = 0
-        job.progress_total = 0
         job.progress_stage = "starting"
         await session.flush()
         return DocumentImportJob(

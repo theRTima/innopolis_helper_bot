@@ -64,8 +64,6 @@ def register_document_routes(
             + "</td><td>" + html.escape(job.original_name) + "</td><td>"
             + html.escape(job.status) + "</td><td>"
             + str(job.progress_percent) + "%"
-            + (f" ({job.progress_current}/{job.progress_total})"
-               if job.progress_total else "")
             + "</td><td>" + html.escape(job.progress_stage or "")
             + "</td><td>" + html.escape(job.error or "") + "</td><td>"
             + (job.created_at.isoformat() if isinstance(job.created_at, datetime) else "")

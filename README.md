@@ -218,9 +218,8 @@ version or a queued, processing or completed upload. The form reports:
 Same file already exists.
 ```
 
-Each queue row shows status, progress percentage, current/total work units and
-the current stage (`ingest`, `render`, `image analysis`, `chunking` or
-`completed`).
+Each queue row shows status, progress percentage and the current stage
+(`ingest`, `render`, `image analysis`, `chunking` or `completed`).
 
 #### Process files from `data/knowledge`
 

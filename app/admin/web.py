@@ -243,7 +243,7 @@ button:hover{background:#244ce0}.foot{margin-top:21px;color:var(--muted);font-si
             label="Document upload queue", icon="fa fa-upload"
         )
         model = DocumentImportJob
-        list_display = [DocumentImportJob.id, DocumentImportJob.title, DocumentImportJob.original_name, DocumentImportJob.status, DocumentImportJob.progress_percent, DocumentImportJob.progress_current, DocumentImportJob.progress_total, DocumentImportJob.progress_stage, DocumentImportJob.created_at, DocumentImportJob.error]
+        list_display = [DocumentImportJob.id, DocumentImportJob.title, DocumentImportJob.original_name, DocumentImportJob.status, DocumentImportJob.progress_percent, DocumentImportJob.progress_stage, DocumentImportJob.created_at, DocumentImportJob.error]
         admin_action_maker = [
             lambda admin: AdminAction(
                 admin,
