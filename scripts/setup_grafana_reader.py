@@ -9,6 +9,31 @@ import asyncpg
 
 
 VIEWS = {
+    "grafana_activity_daily": """
+        SELECT date_trunc('day', COALESCE(a.received_at, q.created_at::timestamp)) AS day,
+               count(*)::bigint AS questions,
+               count(DISTINCT q.telegram_id)::bigint AS users
+        FROM questions q LEFT JOIN analytics a ON a.question_id = q.id GROUP BY 1
+    """,
+    "grafana_delivery_daily": """
+        SELECT date_trunc('day', COALESCE(received_at, created_at)) AS day,
+               COALESCE(delivery_status, 'unknown') AS status, count(*)::bigint AS total
+        FROM analytics GROUP BY 1, 2
+    """,
+    "grafana_escalation_events_daily": """
+        SELECT date_trunc('day', created_at) AS day, status, count(*)::bigint AS total
+        FROM escalation_events GROUP BY 1, 2
+    """,
+    "grafana_import_details_daily": """
+        SELECT date_trunc('day', created_at) AS day, parser, imported,
+               count(*)::bigint AS runs, sum(chunk_count)::bigint AS chunks,
+               sum(model_calls)::bigint AS model_calls, sum(cache_hits)::bigint AS cache_hits,
+               avg(parse_ms)::double precision AS parse_ms,
+               avg(text_ms)::double precision AS text_ms,
+               avg(vision_ms)::double precision AS vision_ms,
+               avg(total_ms)::double precision AS total_ms
+        FROM import_runs GROUP BY 1, 2, 3
+    """,
     "grafana_outcomes_daily": """
         SELECT date_trunc('day', COALESCE(a.received_at, q.created_at::timestamp)) AS day,
                CASE WHEN a.operator_status IN ('requested', 'delivered', 'failed')
