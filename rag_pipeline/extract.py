@@ -22,10 +22,11 @@ from app.ingestion import new_pipeline
 from app.ingestion import normalized as norm
 from app.ingestion import vision_parser as vp
 from app.ingestion.assets import verify_assets
+from app.ingestion.quality import coverage_report
 from rag_pipeline.ingest import sha256_file
 from rag_pipeline.render import RenderError
 
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 MAX_TOKENS_TARGET = 600
 SUPPORTED_FORMATS = {"pdf", "docx", "xlsx", "pptx", "image", "text"}
 OFFICE_FORMATS = {"docx", "xlsx", "pptx"}
@@ -223,9 +224,11 @@ def extract_version(
             ) != cached.get("chunks_sha256"):
                 raise ExtractionError("Cached chunks are damaged.")
             verify_assets(destination, cached.get("assets", []))
-            if cached.get("normalized_sha256") and sha256_file(
-                destination / "normalized.json"
-            ) != cached["normalized_sha256"]:
+            if (
+                cached.get("normalized_sha256")
+                and sha256_file(destination / "normalized.json")
+                != cached["normalized_sha256"]
+            ):
                 raise ExtractionError("Normalized evidence checksum mismatch")
             return {
                 "cached": True,
@@ -311,7 +314,8 @@ def extract_version(
             if file_format != "text":
                 (stage / "normalized.json").write_text(
                     json.dumps(nd.to_dict(), ensure_ascii=False, indent=2)
-                    + "\n", encoding="utf-8",
+                    + "\n",
+                    encoding="utf-8",
                 )
             verify_assets(stage, assets)
             if not assets:
@@ -355,6 +359,16 @@ def extract_version(
                 "preview_path": "chunks.md",
                 "chunks_sha256": sha256_file(chunks_file),
                 "assets": assets,
+                "quality": (
+                    coverage_report(nd, chunks, warnings)
+                    if file_format != "text"
+                    else {
+                        "status": (
+                            "passed_checks" if chunks else "needs_review"
+                        ),
+                        "scope": "Text chunking only",
+                    }
+                ),
             }
             if file_format != "text":
                 chunk_manifest["normalized_path"] = "normalized.json"
@@ -374,6 +388,12 @@ def extract_version(
                         chunk_manifest["review_path"] = "review.md"
                 except Exception as exc:  # review is optional
                     warnings.append(f"review markdown failed: {exc}")
+            # Include optional-review failures in the final quality summary.
+            chunk_manifest["quality"] = (
+                coverage_report(nd, chunks, warnings)
+                if file_format != "text"
+                else chunk_manifest["quality"]
+            )
             (stage / "chunk_manifest.json").write_text(
                 json.dumps(chunk_manifest, ensure_ascii=False, indent=2)
                 + "\n",
@@ -448,8 +468,10 @@ def main() -> int:
     parser.add_argument(
         "--review-markdown",
         action="store_true",
-        help=("Also ask the model to render normalized elements "
-              "as review Markdown"),
+        help=(
+            "Also ask the model to render normalized elements "
+            "as review Markdown"
+        ),
     )
     args = parser.parse_args()
 

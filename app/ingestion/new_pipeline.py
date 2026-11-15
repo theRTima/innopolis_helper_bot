@@ -28,6 +28,7 @@ from app.ingestion import docling_parser as dp
 from app.ingestion import normalized as norm
 from app.ingestion import vision_parser as vp
 from app.ingestion.assets import register_asset
+from app.ingestion.quality import audit_analysis, should_fallback
 
 MAX_PROMPT_CHARS = 40_000
 MAX_BATCH_ELEMENTS = 30
@@ -226,8 +227,12 @@ def _add_analysis_items(
     asset_id: str,
     bbox: list[float] | None,
     fallback_text: str = "",
+    raw_response: str = "",
 ) -> int:
-    items = analysis.get("items") if isinstance(analysis, dict) else None
+    items, audit = audit_analysis(analysis, raw_response, page, asset_id)
+    nd.analysis_records.append(audit)
+    if audit["quality_status"] == "needs_review":
+        nd.warnings.append(f"page {page}: visual analysis needs review")
     added = 0
     if isinstance(items, list):
         for item in items:
@@ -285,7 +290,7 @@ def _add_analysis_items(
             section_path=section_path,
             parent_section_id=parent_section_id,
             source_regions=[{"page": page}],
-            origin="vision",
+            origin="docling",
         )
         added = 1
     return added
@@ -493,6 +498,7 @@ def build_from_pdf(
                 elements_by_page[page] += 1
 
         seen_rects: dict[int, pymupdf.Rect] = {}
+        failed_pages: set[int] = set()
         for index, picture_data in enumerate(pictures):
             page_no = picture_data["page"]
             pdf_page = pdf_doc.load_page(page_no - 1)
@@ -536,6 +542,7 @@ def build_from_pdf(
                 section_path=picture_data["section_path"],
                 parent_section_id=picture_data["parent_id"],
                 asset_id=asset_id,
+                raw_response=raw,
                 bbox=(
                     [target.x0, target.y0, target.x1, target.y1]
                     if target
@@ -543,17 +550,22 @@ def build_from_pdf(
                 ),
             )
             if not added:
+                failed_pages.add(page_no)
                 warnings.append(
                     f"page {page_no}: picture analysis produced no items; "
                     f"raw={raw[:200]!r}"
                 )
 
         for page in sorted(selected):
-            if elements_by_page.get(page):
-                continue
-            if body_chars.get(page, 0) >= dp.MIN_PAGE_TEXT:
-                continue
-            if pictures_by_page.get(page) or tables_by_page.get(page):
+            if not should_fallback(
+                failed_visual=page in failed_pages,
+                has_elements=bool(elements_by_page.get(page)),
+                body_chars=body_chars.get(page, 0),
+                has_visual=bool(
+                    pictures_by_page.get(page) or tables_by_page.get(page)
+                ),
+                min_page_text=dp.MIN_PAGE_TEXT,
+            ):
                 continue
             pdf_page = pdf_doc.load_page(page - 1)
             image_path = temp_dir / f"page_{page:03d}_vision.png"
@@ -575,6 +587,7 @@ def build_from_pdf(
                 section_path=page_context.get(page, ("", 0))[0],
                 parent_section_id=None,
                 asset_id=f"asset-{page}-page",
+                raw_response=raw,
                 bbox=None,
                 fallback_text=vp.clean_content(
                     pdf_page.get_text("text").strip()
@@ -700,7 +713,7 @@ def build_from_image(
     saved_image = temp_dir / ("source" + image_path.suffix.lower())
     shutil.copyfile(image_path, saved_image)
     register_asset(nd.assets, "asset-1-0", saved_image, temp_dir, 1)
-    analysis, _raw = analyze_image(
+    analysis, raw = analyze_image(
         image_path,
         region_id=f"{document_id}:1:image",
         mode="region",
@@ -715,7 +728,7 @@ def build_from_image(
         parent_section_id=None,
         asset_id="asset-1-0",
         bbox=None,
-        fallback_text=image_path.name,
+        raw_response=raw,
     )
     if not added:
         warnings.append("image analysis produced no items")

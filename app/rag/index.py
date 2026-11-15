@@ -204,6 +204,12 @@ def load_versioned_chunks(documents_root: Path) -> list[Chunk]:
             manifest.get("warnings", []),
             "verified" if expected is not None else "not_recorded",
         )
+        if manifest.get("quality", {}).get("status") == "needs_review":
+            logger.warning(
+                "Chunk set requires review: %s quality=%s",
+                manifest_path,
+                manifest["quality"],
+            )
         chunks.extend(loaded)
     return chunks
 

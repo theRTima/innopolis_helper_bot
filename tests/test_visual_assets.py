@@ -167,8 +167,11 @@ def test_extraction_publishes_images_and_checks_cache(tmp_path, monkeypatch):
     first = module.extract_version(stored["version_path"])
     output = Path(first["chunk_path"])
     asset = first["manifest"]["assets"][0]
+    assert "quality" in first["manifest"]
+    assert first["manifest"]["quality"]["missing_source_ids"] == []
     assert (output / asset["path"]).read_bytes() == image.read_bytes()
     import json
+
     evidence = json.loads((output / "normalized.json").read_text())
     assert evidence["elements"][0]["asset_ids"] == ["a1"]
     assert module.extract_version(stored["version_path"])["cached"]

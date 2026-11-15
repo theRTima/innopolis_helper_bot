@@ -125,6 +125,7 @@ class NormalizedDocument:
         self.source_order: dict[str, int] = {}
         self.warnings: list[str] = []
         self.assets: dict[str, dict] = {}
+        self.analysis_records: list[dict] = []
         self._element_seq = 0
         self._source_seq = 0
 
@@ -137,9 +138,11 @@ class NormalizedDocument:
         return {
             "schema_version": 1,
             "elements": [asdict(element) for element in self.elements],
-            "sources": {key: asdict(value)
-                        for key, value in self.sources.items()},
+            "sources": {
+                key: asdict(value) for key, value in self.sources.items()
+            },
             "assets": self.assets,
+            "analysis_records": self.analysis_records,
             "warnings": self.warnings,
         }
 
@@ -372,7 +375,6 @@ class NormalizedDocument:
     ) -> list[dict]:
         resolved: list[dict] = []
         covered: set[str] = set()
-        used: set[str] = set()
         for index, raw in enumerate(raw_chunks):
             if not isinstance(raw, dict):
                 continue
@@ -401,8 +403,6 @@ class NormalizedDocument:
 
             primary_payloads = [self.sources[item] for item in primary_ids]
             context_payloads = [self.sources[item] for item in context_ids]
-            used.update(primary_ids)
-            used.update(context_ids)
             section_path = primary_payloads[0].section_path or ""
             parts: list[str] = []
             seen: set[str] = set()
@@ -448,9 +448,15 @@ class NormalizedDocument:
                 self.source_order.get(payload.source_reference_id, 10**9)
                 for payload in primary_payloads
             )
-            covered.update(
-                payload.source_reference_id for payload in primary_payloads
-            )
+            covered.update(context_ids)
+            for payload in primary_payloads:
+                selector = selectors.get(payload.source_reference_id)
+                if not selector or selector.get("kind") in {
+                    None,
+                    "full",
+                    "table",
+                }:
+                    covered.add(payload.source_reference_id)
             resolved.append(
                 self._make_chunk(
                     index=index,
@@ -471,10 +477,11 @@ class NormalizedDocument:
                     source_ids=primary_ids + context_ids,
                 )
             )
-        if used:
+        if set(self.sources) - covered:
+            self.warnings.append("Recovered omitted or partial sources")
             resolved.extend(
                 self._missing_source_chunks(
-                    used,
+                    covered,
                     start_index=len(resolved),
                     source_name=source_name,
                     document_id=document_id,
@@ -659,7 +666,14 @@ class NormalizedDocument:
                         artifact_sha256=artifact_sha256,
                         page=page,
                         page_to=page_to,
-                        origin="docling",
+                        origin=self._chunk_origin(
+                            [
+                                self.sources[ref]
+                                for el in buffer
+                                for ref in el.source_reference_ids
+                                if ref in self.sources
+                            ]
+                        ),
                         chunk_type="text",
                         title=(
                             section_path.split(" > ")[-1]
