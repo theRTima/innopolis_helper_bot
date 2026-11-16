@@ -1,24 +1,25 @@
 # Innopolis Helper Bot
 
-Telegram assistant for internal documentation. It answers only from loaded
-documents, cites sources, collects feedback, opens support tickets, manages
-Telegram access, and can show support analytics.
+Telegram-ассистент по внутренней документации. Отвечает только по загруженным
+документам, указывает источники, собирает обратную связь, создаёт заявки в
+поддержку, управляет доступом в Telegram и показывает аналитику обращений.
 
-Documents are parsed with Docling and a remote multimodal model. Answers use
-BM25 retrieval over versioned chunks and an OpenAI-compatible chat model.
+Документы разбираются через Docling и удалённую мультимодальную модель. Ответы
+строятся по результатам BM25-поиска по версионированным фрагментам и через
+OpenAI-совместимую чат-модель.
 
-## Quick start with Docker
+## Быстрый старт с Docker
 
-Requirements: Docker with Compose. For a GPU-free local model server, use the
-optional `llm` profile described below.
+Требуется Docker с Compose. Для локального сервера моделей без GPU используйте
+необязательный профиль `llm`, описанный ниже.
 
-**1. Create the environment file.**
+**1. Создайте файл окружения.**
 
 ```bash
 cp .env.example .env
 ```
 
-Set at least:
+Задайте как минимум:
 
 ```env
 TELEGRAM_BOT_TOKEN=...
@@ -31,95 +32,101 @@ GRAFANA_ADMIN_PASSWORD=replace-with-another-password
 GRAFANA_DB_PASSWORD=replace-with-a-reader-password
 ```
 
-`DOCUMENTS_BASE_URL` and `DOCUMENT_LINK_SECRET` enable signed source links and
-must be set together. On Linux, set `HOST_UID` and `HOST_GID` to your user ID so
-uploaded and generated files have the expected ownership.
+`DOCUMENTS_BASE_URL` и `DOCUMENT_LINK_SECRET` включают подписанные ссылки на
+источники и должны быть заданы вместе. На Linux укажите `HOST_UID` и `HOST_GID`
+своего пользователя, чтобы загруженные и сгенерированные файлы получали
+правильного владельца.
 
-**2. Build the images.**
+**2. Соберите образы.**
 
 ```bash
 ./scripts/docker_build.sh
 ```
 
-This builds the default, admin and ingestion images, then removes old dangling
-Docker data. The ingestion image installs CPU-only PyTorch, Docling and
-LibreOffice, so the first build is large. Dependencies are cached in a separate
-layer: changing `app/` no longer reinstalls them.
+Скрипт собирает основные образы, образ админ-панели и образ ingestion, а затем
+удаляет устаревшие Docker-данные. В ingestion-образ устанавливаются PyTorch
+с поддержкой только CPU, Docling и LibreOffice, поэтому первая сборка большая.
+Зависимости кэшируются в отдельном слое: изменения в `app/` больше не
+переустанавливают их.
 
-Equivalent manual build:
+Эквивалентная команда вручную:
 
 ```bash
 docker compose --profile ingest build
 ```
 
-Docling and Hugging Face models are stored in the `ingest_cache` volume and are
-downloaded only on the first extraction.
+Модели Docling и Hugging Face хранятся в томе `ingest_cache` и скачиваются
+только при первом извлечении.
 
-**3. Start the stack.**
+**3. Запустите стек.**
 
 ```bash
 docker compose up -d
 docker compose ps
 ```
 
-The bot applies database migrations on startup. PostgreSQL must be healthy
-before the bot, workers and admin can use it. The admin container exits until
-`storage/admin.env` is prepared; the other services still run.
+Бот применяет миграции базы данных при старте. PostgreSQL должен быть здоров до
+того, как бот, обработчики и админ-панель начнут с ним работать. Контейнер
+админ-панели завершается, пока не подготовлен `storage/admin.env`; остальные
+сервисы продолжают работать.
 
-**4. Open the services.**
+**4. Откройте сервисы.**
 
-| Service | Address |
+| Сервис | Адрес |
 | --- | --- |
-| Admin panel | `http://127.0.0.1:8001/admin/` |
-| Document viewer | `http://127.0.0.1:8090` |
+| Админ-панель | `http://127.0.0.1:8001/admin/` |
+| Просмотр документов | `http://127.0.0.1:8090` |
 | Grafana | `http://127.0.0.1:3000/d/bot-analytics` |
 
-All published ports bind to `127.0.0.1`. Use a reverse proxy for remote access.
+Все опубликованные порты привязаны к `127.0.0.1`. Для удалённого доступа
+используйте обратный прокси.
 
-## Docker services
+## Сервисы Docker
 
-| Service | Purpose | Profile |
+| Сервис | Назначение | Профиль |
 | --- | --- | --- |
-| `bot` | Telegram polling and answers | default |
-| `postgres` | PostgreSQL | default |
-| `viewer` | Signed PDF/Office source viewer | default |
-| `admin` | Admin panel | default |
-| `document-worker` | Processes admin uploads | default |
-| `ticket-worker` | Delivers support tickets; idles without a provider | default |
-| `grafana` | Dashboards | default |
-| `ingest` | One-shot bulk PDF processing | `ingest` |
-| `analytics-labeler` | Classifies questions for Grafana analytics | `analytics` |
-| `llama` | Optional local llama.cpp server | `llm` |
+| `bot` | Опрос Telegram и ответы | по умолчанию |
+| `postgres` | PostgreSQL | по умолчанию |
+| `viewer` | Просмотр подписанных PDF/Office-источников | по умолчанию |
+| `admin` | Админ-панель | по умолчанию |
+| `document-worker` | Обработка загрузок из админ-панели | по умолчанию |
+| `ticket-worker` | Отправка заявок в поддержку; простаивает без провайдера | по умолчанию |
+| `grafana` | Дашборды | по умолчанию |
+| `ingest` | Однократная массовая обработка PDF | `ingest` |
+| `analytics-labeler` | Классификация вопросов для аналитики Grafana | `analytics` |
+| `llama` | Необязательный локальный сервер llama.cpp | `llm` |
 
-Services with a profile are not started by plain `docker compose up -d`. Enable
-them explicitly, for example:
+Сервисы с профилем не запускаются обычной командой `docker compose up -d`.
+Включайте их явно, например:
 
 ```bash
 docker compose --profile analytics up -d analytics-labeler
 docker compose --profile ingest run --rm ingest
 ```
 
-### Optional local llama.cpp
+### Необязательный локальный llama.cpp
 
-Place the GGUF model and multimodal projector in `.models/`, set
-`LLM_BASE_URL=http://llama:8080/v1`, then start the `llm` profile:
+Положите GGUF-модель и мультимодальный проектор в `.models/`, задайте
+`LLM_BASE_URL=http://llama:8080/v1` и запустите профиль `llm`:
 
 ```bash
 docker compose --profile llm up -d llama
 ```
 
-Set `LLAMA_MODEL_FILE` and `LLAMA_MMPROJ_FILE` if the filenames differ from the
-defaults. For parallel extraction, raise `LLAMA_PARALLEL` and `LLAMA_CTX`
-together; each slot receives `LLAMA_CTX / LLAMA_PARALLEL`. Set
-`EXTRACTION_VISION_CONCURRENCY=1` when using a single-slot server.
+Если имена файлов отличаются от значений по умолчанию, задайте
+`LLAMA_MODEL_FILE` и `LLAMA_MMPROJ_FILE`. Для параллельного извлечения
+увеличивайте `LLAMA_PARALLEL` и `LLAMA_CTX` вместе; каждый слот получает
+`LLAMA_CTX / LLAMA_PARALLEL`. Для сервера с одним слотом установите
+`EXTRACTION_VISION_CONCURRENCY=1`.
 
-### Admin panel setup
+### Настройка админ-панели
 
-The admin panel needs two scoped PostgreSQL roles and `storage/admin.env`.
-The ordinary views use the read-only `bot_admin_reader` role. Allowlist,
-invite, upload and document-deletion views use `bot_admin_access`.
+Админ-панели нужны две ограниченные роли PostgreSQL и файл `storage/admin.env`.
+Обычные представления используют роль только для чтения `bot_admin_reader`.
+Управление списком доступа, приглашениями, загрузками и удалением документов
+использует роль `bot_admin_access`.
 
-Create `storage/admin.env` (ignored by git, `chmod 600`):
+Создайте `storage/admin.env` (файл игнорируется git, права `chmod 600`):
 
 ```env
 ADMIN_DATABASE_URL=postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot
@@ -128,8 +135,8 @@ ADMIN_USERNAME=admin
 ADMIN_PASSWORD=CHOOSE_A_STRONG_PASSWORD
 ```
 
-Create the roles through the bot image after the first stack start, when the bot
-has applied migrations:
+Создайте роли через образ бота после первого запуска стека, когда бот применил
+миграции:
 
 ```bash
 docker compose run --rm --no-deps \
@@ -141,58 +148,61 @@ docker compose run --rm --no-deps \
   bot python scripts/setup_admin_access.py
 ```
 
-Replace the example passwords and percent-encode special characters in the
-connection URLs.
+Замените примеры паролей и закодируйте специальные символы в URL подключения
+(percent-encoding).
 
-Then start the panel:
+Затем запустите панель:
 
 ```bash
 docker compose up -d admin
 docker compose logs -f admin
 ```
 
-Rerun `setup_admin_access.py` after upgrading an existing installation; the
-document-deletion feature needs its added table grants.
+После обновления существующей установки повторно запустите
+`setup_admin_access.py`: функции удаления документов нужны добавленные права
+на таблицы.
 
-If `storage/admin.env` is missing, only the admin container fails. The rest of
-the stack continues to run.
+Если `storage/admin.env` отсутствует, завершается только контейнер админ-панели.
+Остальной стек продолжает работать.
 
-### Documents
+### Документы
 
-**Admin upload (recommended).** Open **Document upload queue → Upload document**
-and choose a PDF, DOCX, XLSX or PPTX. The file is staged in `data/inbox/`, queued
-in PostgreSQL, and processed by `document-worker` into versioned chunks under
-`data/processed/`. The next bot question uses the new document without a
-restart.
+**Загрузка через админ-панель (рекомендуется).** Откройте **Document upload
+queue → Upload document** и выберите PDF, DOCX, XLSX или PPTX. Файл попадает в
+`data/inbox/`, ставится в очередь PostgreSQL и обрабатывается
+`document-worker` в версионированные фрагменты под `data/processed/`. Следующий
+вопрос боту уже использует новый документ без перезапуска.
 
-The worker handles one document at a time. The queue shows 10 rows per page;
-use pagination to see older uploads. Reload the queue page to refresh progress.
-Stages are `ingest`, `render`, `image analysis`, `chunking` and `completed`.
+Обработчик берёт один документ за раз. В очереди отображается 10 строк на
+страницу; для старых загрузок используйте пагинацию. Чтобы обновить прогресс,
+перезагрузите страницу очереди. Стадии: `ingest`, `render`, `image analysis`,
+`chunking` и `completed`.
 
-If the same checksum is already stored or actively queued, the upload is
-recorded as `file already exists` and is not processed.
+Если такая контрольная сумма уже сохранена или активно обрабатывается,
+загрузка записывается как `file already exists` и не обрабатывается.
 
-**Delete a document.** The **Documents** tab has a **Delete** action. It removes
-the document, its chunks and stored version files from the knowledge base, while
-keeping upload-queue history. The same file can be uploaded again afterwards.
-The admin container mounts `data/processed` read-write for this.
+**Удаление документа.** На вкладке **Documents** есть действие **Delete**. Оно
+удаляет документ, его фрагменты и сохранённые файлы версий из базы знаний, но
+оставляет историю в очереди загрузок. Тот же файл можно загрузить снова.
+Для этого контейнер админ-панели монтирует `data/processed` в режиме чтения и
+записи.
 
-**Bulk ingest from `data/knowledge` (optional).** The bulk scanner processes PDFs
-only:
+**Массовая загрузка из `data/knowledge` (необязательно).** Массовый сканер
+обрабатывает только PDF:
 
 ```bash
 cp new-document.pdf data/knowledge/
 docker compose --profile ingest run --rm ingest
 ```
 
-Existing unchanged files use the extraction cache. Preview derived document IDs
-without processing:
+Неизменённые файлы используют кэш извлечения. Посмотреть вычисленные ID
+документов без обработки:
 
 ```bash
 docker compose --profile ingest run --rm ingest --dry-run
 ```
 
-### Operations
+### Операции
 
 ```bash
 docker compose ps
@@ -202,21 +212,21 @@ docker compose stop
 docker compose start
 ```
 
-Stop containers but keep PostgreSQL, Grafana and model-cache volumes:
+Остановить контейнеры, сохранив тома PostgreSQL, Grafana и кэша моделей:
 
 ```bash
 docker compose --profile "*" down
 ```
 
-Delete containers **and all stored data**, including the database, dashboards
-and model cache. This is destructive:
+Удалить контейнеры **и все сохранённые данные**, включая базу, дашборды и кэш
+моделей. Это необратимо:
 
 ```bash
 docker compose --profile "*" down -v
 ```
 
-After changing `.env`, recreate the affected service; `restart` does not reload
-environment variables:
+После изменения `.env` пересоздайте нужный сервис; `restart` не перечитывает
+переменные окружения:
 
 ```bash
 docker compose up -d --force-recreate bot
@@ -224,29 +234,30 @@ docker compose up -d --force-recreate admin
 docker compose up -d --force-recreate document-worker
 ```
 
-Rebuild after changing application code or Dockerfiles:
+После изменения кода приложения или Dockerfile пересоберите образы:
 
 ```bash
 docker compose --profile ingest build
 docker compose up -d
 ```
 
-Apply migrations manually if needed. The bot also does this automatically at
-startup:
+Миграции можно применить вручную. Бот также делает это автоматически при
+старте:
 
 ```bash
 docker compose run --rm --no-deps bot alembic upgrade head
 ```
 
-### Docker disk maintenance
+### Обслуживание диска Docker
 
 ```bash
 ./scripts/docker_cleanup.sh
 ```
 
-The script removes stopped one-shot containers, dangling images, unused networks
-and build cache older than 7 days. Named volumes are never pruned. Tune it with
-`BUILD_CACHE_TTL` or `--images`:
+Скрипт удаляет остановленные одноразовые контейнеры, висячие образы,
+неиспользуемые сети и кэш сборки старше 7 дней. Именованные тома никогда не
+удаляются. Настройте срок через `BUILD_CACHE_TTL` или удалите неиспользуемые
+образы с `--images`:
 
 ```bash
 BUILD_CACHE_TTL=720h ./scripts/docker_cleanup.sh
@@ -254,40 +265,41 @@ BUILD_CACHE_TTL=720h ./scripts/docker_cleanup.sh
 ./scripts/docker_cleanup.sh --all-cache
 ```
 
-For an automated build with cleanup, use `./scripts/docker_build.sh`. Container
-logs are capped at 3 × 10 MB per service.
+Для автоматической сборки с очисткой используйте `./scripts/docker_build.sh`.
+Логи контейнеров ограничены 3 × 10 МБ на сервис.
 
-## Run locally without Docker
+## Запуск локально без Docker
 
-The normal Python launch is short. Docker is optional; the bot accepts either
-SQLite (default) or PostgreSQL.
+Обычный запуск через Python занимает несколько команд. Docker необязателен;
+бот поддерживает SQLite (по умолчанию) или PostgreSQL.
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements/base.txt
 cp .env.example .env
-# edit TELEGRAM_BOT_TOKEN, LLM_BASE_URL, LLM_MODEL and LLM_API_KEY
+# укажите TELEGRAM_BOT_TOKEN, LLM_BASE_URL, LLM_MODEL и LLM_API_KEY
 .venv/bin/python -m app
 ```
 
-The bot applies database migrations on startup and creates `data/bot.sqlite3`
-when no `DATABASE_URL` is set. It can start without documents and will answer
-that no supporting fragments were found.
+Бот применяет миграции при старте и создаёт `data/bot.sqlite3`, если
+`DATABASE_URL` не задан. Он может запуститься без документов и будет отвечать,
+что подходящие фрагменты не найдены.
 
-For document processing, install the ingestion dependencies and LibreOffice for
-Office files:
+Для обработки документов установите зависимости извлечения и LibreOffice для
+Office-файлов:
 
 ```bash
 .venv/bin/python -m pip install -r requirements/ingestion.txt
 ```
 
-Optional local viewer:
+Необязательный локальный просмотрщик:
 
 ```bash
 .venv/bin/python -m uvicorn app.anchors.viewer:app --host 127.0.0.1 --port 8090
 ```
 
-Manual single-document pipeline, if you are not using the admin worker:
+Ручной конвейер для одного документа, если вы не используете обработчик из
+админ-панели:
 
 ```bash
 .venv/bin/python -m app.rag.ingest "data/knowledge/travel.pdf" --document-id travel
@@ -295,20 +307,20 @@ Manual single-document pipeline, if you are not using the admin worker:
 .venv/bin/python -m app.rag.extract --all
 ```
 
-`app.rag.extract --pages 4,7` creates a partial debug extract that the bot
-ignores. `--all` commands process every stored version.
+`app.rag.extract --pages 4,7` создаёт частичное отладочное извлечение, которое
+бот игнорирует. Команды `--all` обрабатывают все сохранённые версии.
 
-### Local admin preview
+### Локальный запуск админ-панели
 
-The admin panel has different FastAPI requirements from the bot, so use a
-separate environment:
+У админ-панели другие требования к FastAPI, чем у бота, поэтому используйте
+отдельное окружение:
 
 ```bash
 python3 -m venv storage/admin-venv
 storage/admin-venv/bin/pip install -r requirements/admin.txt
 ```
 
-Start the panel with the same `storage/admin.env` values used by Docker:
+Запустите панель с теми же значениями `storage/admin.env`, что и в Docker:
 
 ```bash
 ADMIN_DATABASE_URL='postgresql+asyncpg://bot_admin_reader:READER_PASSWORD@127.0.0.1:5438/bot' \
@@ -319,117 +331,125 @@ ADMIN_PASSWORD=CHOOSE_A_STRONG_PASSWORD \
   --factory --host 127.0.0.1 --port 8001
 ```
 
-For local uploads, also run `document-worker` from the main environment with
-`DATABASE_URL` and `DOCUMENTS_DIR` set. Keep the admin panel bound to localhost,
-or put it behind HTTPS and access controls. AMIS loads UI assets from
-`unpkg.com` by default.
+Для локальных загрузок также запустите `document-worker` из основного окружения
+с заданными `DATABASE_URL` и `DOCUMENTS_DIR`. Держите админ-панель привязанной к
+localhost или размещайте её за HTTPS с контролем доступа. AMIS по умолчанию
+загружает ресурсы интерфейса с `unpkg.com`.
 
-## Configuration
+## Конфигурация
 
-Core variables:
+Основные переменные:
 
-| Variable | Default | Purpose |
+| Переменная | По умолчанию | Назначение |
 | --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | — | Bot token from @BotFather |
-| `TELEGRAM_BOT_USERNAME` | — | Username without `@`; enables invite links |
-| `TELEGRAM_ALLOWED_USERNAMES` | empty: deny everyone | One-time allowlist bootstrap |
-| `ACCESS_INVITE_NOTIFY_CHAT_ID` | — | Optional Telegram chat for invite activations |
-| `SUPPORT_URL` | empty | Support button destination |
-| `LLM_BASE_URL` | local fallback | OpenAI-compatible base URL |
-| `LLM_MODEL` | `qwen3.8-flash` | Provider model ID |
-| `LLM_API_KEY` | `local` | Provider API key |
-| `LLM_SESSION_ID` | `innopolis-helper-bot` | Optional routing/session header |
-| `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Client identification |
-| `LLM_ANSWER_REASONING_EFFORT` | `minimal` | Answer reasoning effort |
-| `LLM_EXTRACTION_REASONING_EFFORT` | `low` | Extraction reasoning effort |
-| `EXTRACTION_VISION_CONCURRENCY` | `2` | Parallel picture/page vision calls |
-| `EXTRACTION_TEXT_CONCURRENCY` | `4` | Parallel chunk-grouping calls |
-| `EXTRACTION_REQUEST_TIMEOUT` | `180` | Extraction request timeout, seconds |
-| `EXTRACTION_MIN_IMAGE_PIXELS` | `1024` | Skip tiny decorative pictures; `0` disables |
-| `EXTRACTION_CACHE_ENABLED` | `true` | Cache raw extraction responses |
-| `EXTRACTION_CACHE_DIR` | `~/.cache/innopolis-helper-bot/vision` | Raw response cache |
-| `LLM_ENABLE_THINKING` | `auto` | Thinking mode for the tested OpenCode/qwen pair |
-| `LLM_THINKING_BUDGET` | provider default (`512`) | Thinking-token budget |
-| `ANSWER_MAX_COMPLETION_TOKENS` | `1400` | Thinking + answer token limit |
-| `ANSWER_MAX_TOKENS` | `600` | Answer output limit |
-| `TEMPERATURE` | `0.1` | Answer temperature |
-| `TOP_K` | `2` | Initial retrieval seeds |
-| `MIN_SCORE` | `0` | Minimum BM25 score |
-| `KNOWLEDGE_DIR` | `data/knowledge` | Bulk-ingest PDF directory |
-| `DOCUMENTS_DIR` | `data/processed/documents` | Versioned document store |
-| `DATABASE_PATH` | `data/bot.sqlite3` | SQLite path |
-| `DATABASE_URL` | — | Optional PostgreSQL URL |
-| `DOCUMENTS_BASE_URL` | — | Public viewer URL for signed links |
-| `DOCUMENT_LINK_SECRET` | — | HMAC secret for signed links |
-| `TICKET_PROVIDER` | empty: disabled | `demo`, `jsm`, `zendesk` or `usedesk` |
-| `TICKET_BASE_URL` | — | Ticket provider API URL |
-| `TICKET_API_TOKEN` | — | Ticket provider secret |
-| `TICKET_EMAIL` | — | Optional agent email |
-| `JIRA_SERVICE_DESK_ID` | — | Jira Service Management desk ID |
-| `JIRA_REQUEST_TYPE_ID` | — | Jira Service Management request type |
-| `USEDESK_CHANNEL_ID` | — | Usedesk channel ID |
-| `TICKET_WEB_BASE_URL` | — | Browser URL prefix for ticket links |
-| `ANALYTICS_AREAS_FILE` | — | Optional product-area mapping for the labeler |
+| `TELEGRAM_BOT_TOKEN` | — | Токен бота от @BotFather |
+| `TELEGRAM_BOT_USERNAME` | — | Имя бота без `@`; включает ссылки-приглашения |
+| `TELEGRAM_ALLOWED_USERNAMES` | пусто: доступ запрещён всем | Однократная инициализация списка доступа |
+| `ACCESS_INVITE_NOTIFY_CHAT_ID` | — | Необязательный Telegram-чат для уведомлений об активации приглашений |
+| `SUPPORT_URL` | пусто | Адрес кнопки поддержки |
+| `LLM_BASE_URL` | локальное значение по умолчанию | Базовый URL OpenAI-совместимого провайдера |
+| `LLM_MODEL` | `qwen3.8-flash` | ID модели провайдера |
+| `LLM_API_KEY` | `local` | API-ключ провайдера |
+| `LLM_SESSION_ID` | `innopolis-helper-bot` | Необязательный заголовок маршрутизации/сессии |
+| `LLM_USER_AGENT` | `innopolis-helper-bot/1.0` | Идентификация клиента |
+| `LLM_ANSWER_REASONING_EFFORT` | `minimal` | Усилие рассуждения для ответа |
+| `LLM_EXTRACTION_REASONING_EFFORT` | `low` | Усилие рассуждения при извлечении |
+| `EXTRACTION_VISION_CONCURRENCY` | `2` | Параллельные vision-запросы по картинкам/страницам |
+| `EXTRACTION_TEXT_CONCURRENCY` | `4` | Параллельные запросы группировки фрагментов |
+| `EXTRACTION_REQUEST_TIMEOUT` | `180` | Таймаут запроса извлечения, секунды |
+| `EXTRACTION_MIN_IMAGE_PIXELS` | `1024` | Пропускать мелкие декоративные картинки; `0` отключает |
+| `EXTRACTION_CACHE_ENABLED` | `true` | Кэшировать сырые ответы извлечения |
+| `EXTRACTION_CACHE_DIR` | `~/.cache/innopolis-helper-bot/vision` | Каталог кэша сырых ответов |
+| `LLM_ENABLE_THINKING` | `auto` | Режим thinking для проверенной пары OpenCode/qwen |
+| `LLM_THINKING_BUDGET` | по умолчанию провайдера (`512`) | Бюджет thinking-токенов |
+| `ANSWER_MAX_COMPLETION_TOKENS` | `1400` | Лимит thinking + ответа |
+| `ANSWER_MAX_TOKENS` | `600` | Лимит длины ответа |
+| `TEMPERATURE` | `0.1` | Температура ответа |
+| `TOP_K` | `2` | Начальное число результатов поиска |
+| `MIN_SCORE` | `0` | Минимальный балл BM25 |
+| `KNOWLEDGE_DIR` | `data/knowledge` | Каталог PDF для массовой загрузки |
+| `DOCUMENTS_DIR` | `data/processed/documents` | Хранилище версионированных документов |
+| `DATABASE_PATH` | `data/bot.sqlite3` | Путь SQLite |
+| `DATABASE_URL` | — | Необязательный URL PostgreSQL |
+| `DOCUMENTS_BASE_URL` | — | Публичный URL просмотрщика для подписанных ссылок |
+| `DOCUMENT_LINK_SECRET` | — | HMAC-секрет для подписанных ссылок |
+| `TICKET_PROVIDER` | пусто: отключено | `demo`, `jsm`, `zendesk` или `usedesk` |
+| `TICKET_BASE_URL` | — | URL API тикет-провайдера |
+| `TICKET_API_TOKEN` | — | Секрет тикет-провайдера |
+| `TICKET_EMAIL` | — | Необязательный email агента |
+| `JIRA_SERVICE_DESK_ID` | — | ID service desk в Jira Service Management |
+| `JIRA_REQUEST_TYPE_ID` | — | ID типа запроса в Jira Service Management |
+| `USEDESK_CHANNEL_ID` | — | ID канала Usedesk |
+| `TICKET_WEB_BASE_URL` | — | Префикс URL для ссылок на тикеты в браузере |
+| `ANALYTICS_AREAS_FILE` | — | Необязательное сопоставление продуктовых областей для разметчика |
 
-Docker-only values live in `.env` or `storage/admin.env`:
+Переменные только для Docker находятся в `.env` или `storage/admin.env`:
 
-| Variable | Purpose |
+| Переменная | Назначение |
 | --- | --- |
-| `POSTGRES_PASSWORD` | PostgreSQL password; required by Compose |
-| `POSTGRES_PORT` | Host port for PostgreSQL, default `5438` |
-| `GRAFANA_ADMIN_PASSWORD` | Grafana administrator password |
-| `GRAFANA_DB_PASSWORD` | Grafana read-only database password |
-| `GRAFANA_PORT` | Grafana host port, default `3000` |
-| `VIEWER_PORT` | Viewer host port, default `8090` |
-| `ADMIN_PORT` | Admin host port, default `8001` |
-| `HOST_UID`, `HOST_GID` | Host ownership for ingestion files |
-| `ADMIN_DATABASE_URL` | Read-only PostgreSQL URL for admin views |
-| `ADMIN_ACCESS_DATABASE_URL` | Scoped URL for admin write actions |
-| `LLAMA_MODEL_FILE` | GGUF model filename for the optional `llm` profile |
-| `LLAMA_MMPROJ_FILE` | Multimodal projector filename for the `llm` profile |
-| `LLAMA_CTX` | Total llama.cpp context size |
-| `LLAMA_PARALLEL` | llama.cpp server slots; match extraction concurrency |
+| `POSTGRES_PASSWORD` | Пароль PostgreSQL; обязателен для Compose |
+| `POSTGRES_PORT` | Порт PostgreSQL на хосте, по умолчанию `5438` |
+| `GRAFANA_ADMIN_PASSWORD` | Пароль администратора Grafana |
+| `GRAFANA_DB_PASSWORD` | Пароль роли Grafana только для чтения |
+| `GRAFANA_PORT` | Порт Grafana на хосте, по умолчанию `3000` |
+| `VIEWER_PORT` | Порт просмотрщика на хосте, по умолчанию `8090` |
+| `ADMIN_PORT` | Порт админ-панели на хосте, по умолчанию `8001` |
+| `HOST_UID`, `HOST_GID` | Владелец файлов извлечения на хосте |
+| `ADMIN_DATABASE_URL` | URL PostgreSQL только для чтения для админ-панели |
+| `ADMIN_ACCESS_DATABASE_URL` | Ограниченный URL для операций записи в админ-панели |
+| `LLAMA_MODEL_FILE` | Имя GGUF-модели для необязательного профиля `llm` |
+| `LLAMA_MMPROJ_FILE` | Имя мультимодального проектора для профиля `llm` |
+| `LLAMA_CTX` | Общий размер контекста llama.cpp |
+| `LLAMA_PARALLEL` | Слоты сервера llama.cpp; согласуйте с параллелизмом извлечения |
 
-`LLM_SESSION_ID` and `LLM_USER_AGENT` are optional for generic providers and
-required by some routed providers. Reasoning values are provider model
-parameters (`none`, `minimal`, `low`, `medium`, `high`).
+`LLM_SESSION_ID` и `LLM_USER_AGENT` необязательны для обычных провайдеров и
+нужны некоторым маршрутизирующим провайдерам. Значения reasoning — параметры
+модели провайдера (`none`, `minimal`, `low`, `medium`, `high`).
 
-## Extraction and retrieval
+## Извлечение и поиск
 
-Every document is stored as an immutable version, rendered when needed, and
-extracted into versioned chunks. The bot reloads changed chunk manifests before
-each question, so uploads and deletions do not require a restart.
+Каждый документ хранится как неизменяемая версия, при необходимости
+рендерится и разбирается на версионированные фрагменты. Бот перечитывает
+изменённые манифесты фрагментов перед каждым вопросом, поэтому загрузки и
+удаления не требуют перезапуска.
 
-- Docling extracts text, tables and picture regions.
-- Picture regions and low-text pages are analysed by the multimodal model.
-- Independent vision calls run in parallel; raw responses are cached per request.
-- Clear visual items are accepted per item; uncertain transcription or diagram
-  directions quarantine only that item. Response-level limitations, conflicts
-  and review proposals remain in the audit metadata.
-- Pages with small picture regions and a weak text layer fall back to full-page
-  vision, and unusually tall pages are split into overlapping tiles so
-  schedule/poster text survives model downscaling.
-- BM25 supplies evidence to the answer model; answers must cite source IDs.
-- Retrieval context expansion is bounded and does not truncate chunks.
-- Diagram nodes/edges and table rows/columns in accepted visual chunks are
-  available to the answer prompt.
+- Docling извлекает текст, таблицы и области изображений.
+- Области изображений и страницы с малым количеством текста анализируются
+  мультимодальной моделью.
+- Независимые vision-запросы выполняются параллельно; сырые ответы кэшируются
+  для каждого запроса.
+- Чёткие визуальные элементы принимаются по отдельности; неопределённая
+  транскрипция или направление стрелок на схеме блокируют только этот элемент.
+  Ограничения, конфликты и предложения на проверку сохраняются в метаданных
+  проверки.
+- Страницы с небольшими областями изображений и слабым текстовым слоем
+  дополнительно анализируются целиком, а очень высокие страницы делятся на
+  перекрывающиеся фрагменты, чтобы текст расписаний и постеров не терялся при
+  уменьшении изображения моделью.
+- BM25 передаёт доказательства модели ответа; ответы должны содержать ссылки
+  на ID источников.
+- Расширение контекста поиска ограничено и не обрезает фрагменты.
+- Узлы и связи схем, строки и столбцы таблиц из принятых визуальных фрагментов
+  доступны в промпте ответа.
 
-Supported source formats include PDF, DOCX, XLSX, PPTX, images, text, Markdown,
-HTML, structured data and source code. The admin upload accepts PDF, DOCX, XLSX
-and PPTX; use the CLI for other formats. Office extraction requires LibreOffice,
-either installed locally or provided by the ingestion image. Set `SOFFICE_PATH`
-if `soffice` is not on `PATH`.
+Поддерживаются PDF, DOCX, XLSX, PPTX, изображения, текст, Markdown, HTML,
+структурированные данные и исходный код. Админ-панель принимает PDF, DOCX,
+XLSX и PPTX; для остальных форматов используйте CLI. Для извлечения из Office
+нужен LibreOffice, установленный локально или доступный в ingestion-образе.
+Если `soffice` отсутствует в `PATH`, задайте `SOFFICE_PATH`.
 
-## Access, tickets and analytics
+## Доступ, тикеты и аналитика
 
-`TELEGRAM_ALLOWED_USERNAMES` bootstraps the allowlist once. After that, manage
-access in the admin panel's **Allowed Telegram users** tab. Invite links bind a
-Telegram ID to the allowlist and can have expiry/use limits. Access changes apply
-without restarting the bot.
+`TELEGRAM_ALLOWED_USERNAMES` однократно инициализирует список доступа. Дальше
+управляйте доступом на вкладке **Allowed Telegram users** в админ-панели.
+Ссылки-приглашения привязывают Telegram ID к списку доступа и могут иметь срок
+действия и лимит использований. Изменения доступа применяются без перезапуска
+бота.
 
-`ticket-worker` starts with the default stack and stays idle until
-`TICKET_PROVIDER` is configured. It stores a durable request immediately and
-records the external ticket ID after the provider confirms creation. Demo mode:
+`ticket-worker` запускается вместе с основным стеком и простаивает, пока не
+задан `TICKET_PROVIDER`. Он сразу сохраняет запрос в надёжную очередь и
+записывает внешний ID тикета после подтверждения создания провайдером.
+Демо-режим:
 
 ```env
 TICKET_PROVIDER=demo
@@ -440,76 +460,79 @@ docker compose up -d ticket-worker
 docker compose logs -f ticket-worker
 ```
 
-Support analytics is optional. The background labeler classifies new questions
-for the Grafana dashboards; it does not delay Telegram replies. Run one labeler
-per database:
+Аналитика поддержки необязательна. Фоновый разметчик классифицирует новые
+вопросы для дашбордов Grafana и не задерживает ответы в Telegram. Запускайте
+один разметчик на базу данных:
 
 ```bash
 docker compose --profile analytics up -d analytics-labeler
 docker compose --profile analytics logs -f analytics-labeler
 ```
 
-Set `ANALYTICS_AREAS_FILE` to an optional JSON product-area mapping. See
-[docs/analytics.md](docs/analytics.md) for ticket providers, labeling workflow
-and privacy notes.
+Задайте `ANALYTICS_AREAS_FILE` для необязательного JSON-сопоставления
+продуктовых областей. Подробности о тикет-провайдерах, процессе разметки и
+приватности см. в [docs/analytics.md](docs/analytics.md).
 
-## Tests
+## Тесты
 
 ```bash
 .venv/bin/python -m pip install -r requirements/dev.txt
 .venv/bin/python -m pytest
 ```
 
-Offline tests do not require model credentials. Install ingestion dependencies
-before running the full suite.
+Офлайн-тесты не требуют учётных данных модели. Перед полным набором тестов
+установите зависимости извлечения.
 
-## Troubleshooting
+## Диагностика
 
-**The bot has no chunks.** It starts, but cannot answer from documents until an
-upload or bulk ingest succeeds. Check `docker compose logs -f document-worker`
-and `docker compose ps`.
+**У бота нет фрагментов.** Он запускается, но не может отвечать по документам,
+пока не завершится загрузка или массовая обработка. Проверьте
+`docker compose logs -f document-worker` и `docker compose ps`.
 
-**An admin upload stays queued.** The worker processes one document at a time.
-A large PDF blocks later uploads. Do not delete the staged inbox file while the
-job is active.
+**Загрузка через админ-панель остаётся в очереди.** Обработчик берёт один
+документ за раз. Большой PDF блокирует следующие загрузки. Не удаляйте
+подготовленный файл из inbox, пока задача активна.
 
-**Duplicate upload is rejected.** A stored version or a queued/processing upload
-has the same checksum. Delete the existing document in **Documents** if you want
-to replace it; completed queue history does not block a re-upload.
+**Повторная загрузка отклонена.** Сохранённая версия или загрузка в очереди
+имеет такую же контрольную сумму. Если нужно заменить документ, удалите
+существующий документ на вкладке **Documents**; завершённая история очереди не
+блокирует повторную загрузку.
 
-**`Extraction is locked`.** A previous run was interrupted. Check that no worker
-is running, then remove the reported `.extract.lock`, `.ingest.lock` or
-`.render.lock` file.
+**`Extraction is locked`.** Предыдущий запуск был прерван. Убедитесь, что
+обработчик не работает, и удалите указанный файл `.extract.lock`,
+`.ingest.lock` или `.render.lock`.
 
-**The model returns no JSON or empty chunks.** Confirm that the model accepts
-images, check `LLM_BASE_URL`, `LLM_MODEL` and `LLM_API_KEY`, and retry. Raw
-responses are cached; changing the model or prompts invalidates them.
+**Модель возвращает не JSON или пустые фрагменты.** Убедитесь, что модель
+принимает изображения, проверьте `LLM_BASE_URL`, `LLM_MODEL` и `LLM_API_KEY` и
+повторите попытку. Сырые ответы кэшируются; смена модели или промптов
+сбрасывает кэш.
 
-**Office rendering fails.** Install LibreOffice and ensure `soffice` is on
-`PATH`, or set `SOFFICE_PATH` / pass `--soffice`.
+**Не работает рендеринг Office.** Установите LibreOffice и убедитесь, что
+`soffice` доступен в `PATH`, либо задайте `SOFFICE_PATH` / передайте
+`--soffice`.
 
-**Access denied.** Check the sender's Telegram username and the active entry in
-**Allowed Telegram users**. The environment allowlist is only a one-time
-bootstrap.
+**Доступ запрещён.** Проверьте Telegram-username отправителя и активную запись
+в **Allowed Telegram users**. Список из переменной окружения используется
+только для однократной инициализации.
 
-**Network is still in use after `down`.** Stop optional profiles too:
+**Сеть всё ещё используется после `down`.** Остановите необязательные профили:
 
 ```bash
 docker compose --profile "*" down
 ```
 
-Keep `.env`, `storage/admin.env`, internal documents and generated artifacts out
-of commits.
+Не коммитьте `.env`, `storage/admin.env`, внутренние документы и
+сгенерированные артефакты.
 
-## Credits
+## Благодарности
 
-The admin panel is based on
-[FastAPI-Amis-Admin](https://github.com/amisadmin/fastapi-amis-admin), with the
-[AMIS](https://github.com/baidu/amis) UI framework.
+Админ-панель основана на
+[FastAPI-Amis-Admin](https://github.com/amisadmin/fastapi-amis-admin) и
+UI-фреймворке [AMIS](https://github.com/baidu/amis).
 
-Additional building blocks: [aiogram](https://github.com/aiogram/aiogram) for
-Telegram, [Docling](https://github.com/docling-project/docling) for document
-parsing, [PyMuPDF](https://github.com/pymupdf/PyMuPDF) for PDF rendering,
-[FastAPI](https://fastapi.tiangolo.com/) and
-[SQLAlchemy](https://www.sqlalchemy.org/), and
-[Grafana](https://grafana.com/) for dashboards.
+Дополнительные компоненты: [aiogram](https://github.com/aiogram/aiogram) для
+Telegram, [Docling](https://github.com/docling-project/docling) для разбора
+документов, [PyMuPDF](https://github.com/pymupdf/PyMuPDF) для рендеринга PDF,
+[FastAPI](https://fastapi.tiangolo.com/) и
+[SQLAlchemy](https://www.sqlalchemy.org/), а также
+[Grafana](https://grafana.com/) для дашбордов.
